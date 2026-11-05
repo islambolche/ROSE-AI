@@ -1,5 +1,5 @@
 import { sanitizeFilename } from './files';
-import { SaveFileRequestMeta } from '../types';
+import { SaveFileRequestMeta, PendingApprovalAction } from '../types';
 
 const DB_NAME = 'rose_file_system_db';
 const STORE_NAME = 'handles';
@@ -140,4 +140,62 @@ export function downloadAsFile(name: string, content: string) {
   a.download = cleanName;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+const PENDING_APPROVALS_KEY = 'rose_pending_approvals_v1';
+type PendingApprovalListener = (items: PendingApprovalAction[]) => void;
+const pendingListeners = new Set<PendingApprovalListener>();
+let resolveHandler: ((item: PendingApprovalAction, approved: boolean) => void) | null = null;
+
+export function getPendingApprovals(): PendingApprovalAction[] {
+  try {
+    const raw = localStorage.getItem(PENDING_APPROVALS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function savePendingApprovals(items: PendingApprovalAction[]): void {
+  try {
+    localStorage.setItem(PENDING_APPROVALS_KEY, JSON.stringify(items));
+    pendingListeners.forEach((fn) => fn(items));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function addPendingApproval(item: PendingApprovalAction): void {
+  const current = getPendingApprovals().filter((x) => x.id !== item.id);
+  savePendingApprovals([item, ...current]);
+}
+
+export function removePendingApproval(id: string): PendingApprovalAction | undefined {
+  const current = getPendingApprovals();
+  const target = current.find((x) => x.id === id);
+  const next = current.filter((x) => x.id !== id);
+  savePendingApprovals(next);
+  return target;
+}
+
+export function subscribePendingApprovals(fn: PendingApprovalListener): () => void {
+  pendingListeners.add(fn);
+  return () => {
+    pendingListeners.delete(fn);
+  };
+}
+
+export function registerPendingApprovalResolver(
+  handler: ((item: PendingApprovalAction, approved: boolean) => void) | null
+): void {
+  resolveHandler = handler;
+}
+
+export function resolvePendingApproval(id: string, approved: boolean): void {
+  const item = removePendingApproval(id);
+  if (item && resolveHandler) {
+    resolveHandler(item, approved);
+  }
 }

@@ -12,6 +12,7 @@ import {
   RoseReplyLengthType,
   VoiceSettingsConfig,
   IntegrationsConfig,
+  PermissionRulesConfig,
 } from '../types';
 
 const STORAGE_KEY = 'rose_ai_user_preferences_v2';
@@ -130,6 +131,21 @@ export const DEFAULT_INTEGRATIONS: IntegrationsConfig = {
   askBeforeAction: true,
 };
 
+export const DEFAULT_PERMISSION_RULES: PermissionRulesConfig = {
+  sendWhatsappMessenger: true,
+  postReplyFbYoutube: true,
+  sendEmailApplyJob: true,
+  saveOrSendBill: true,
+  openWebsiteOrAppPc: true,
+  typeTextOrKeysPc: true,
+  readOrOpenFilesPc: true,
+  playMusicVideo: true,
+  deleteFiles: true,
+  paymentsOrTransfer: true,
+  passwordsOrPrivateData: true,
+  installOrUninstallSoftware: true,
+};
+
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   userName: '',
   userAddressAs: 'শুধু নাম',
@@ -144,9 +160,14 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   voiceSettings: DEFAULT_VOICE_SETTINGS,
   pcControl: {
     allowFileSave: false,
+    openAppsAndWebsites: true,
+    typeTextAndPressKeys: true,
+    readOrOpenFiles: true,
+    cameraAndMic: true,
   },
   voiceCaptions: false,
   integrations: DEFAULT_INTEGRATIONS,
+  permissionRules: DEFAULT_PERMISSION_RULES,
 };
 
 type SettingsListener = (settings: AppSettings) => void;
@@ -314,6 +335,22 @@ export const settingsService = {
         pcControl: {
           allowFileSave: Boolean(parsed.pcControl?.allowFileSave),
           workFolderName: parsed.pcControl?.workFolderName || '',
+          openAppsAndWebsites:
+            parsed.pcControl?.openAppsAndWebsites !== undefined
+              ? Boolean(parsed.pcControl.openAppsAndWebsites)
+              : true,
+          typeTextAndPressKeys:
+            parsed.pcControl?.typeTextAndPressKeys !== undefined
+              ? Boolean(parsed.pcControl.typeTextAndPressKeys)
+              : true,
+          readOrOpenFiles:
+            parsed.pcControl?.readOrOpenFiles !== undefined
+              ? Boolean(parsed.pcControl.readOrOpenFiles)
+              : true,
+          cameraAndMic:
+            parsed.pcControl?.cameraAndMic !== undefined
+              ? Boolean(parsed.pcControl.cameraAndMic)
+              : true,
         },
         voiceCaptions: parsed.voiceCaptions !== undefined ? Boolean(parsed.voiceCaptions) : false,
         integrations: {
@@ -337,6 +374,45 @@ export const settingsService = {
             ...DEFAULT_INTEGRATIONS.gmail,
             ...(parsed.integrations?.gmail || {}),
           },
+        },
+        permissionRules: {
+          sendWhatsappMessenger:
+            parsed.permissionRules?.sendWhatsappMessenger !== undefined
+              ? Boolean(parsed.permissionRules.sendWhatsappMessenger)
+              : true,
+          postReplyFbYoutube:
+            parsed.permissionRules?.postReplyFbYoutube !== undefined
+              ? Boolean(parsed.permissionRules.postReplyFbYoutube)
+              : true,
+          sendEmailApplyJob:
+            parsed.permissionRules?.sendEmailApplyJob !== undefined
+              ? Boolean(parsed.permissionRules.sendEmailApplyJob)
+              : true,
+          saveOrSendBill:
+            parsed.permissionRules?.saveOrSendBill !== undefined
+              ? Boolean(parsed.permissionRules.saveOrSendBill)
+              : true,
+          openWebsiteOrAppPc:
+            parsed.permissionRules?.openWebsiteOrAppPc !== undefined
+              ? Boolean(parsed.permissionRules.openWebsiteOrAppPc)
+              : true,
+          typeTextOrKeysPc:
+            parsed.permissionRules?.typeTextOrKeysPc !== undefined
+              ? Boolean(parsed.permissionRules.typeTextOrKeysPc)
+              : true,
+          readOrOpenFilesPc:
+            parsed.permissionRules?.readOrOpenFilesPc !== undefined
+              ? Boolean(parsed.permissionRules.readOrOpenFilesPc)
+              : true,
+          playMusicVideo:
+            parsed.permissionRules?.playMusicVideo !== undefined
+              ? Boolean(parsed.permissionRules.playMusicVideo)
+              : true,
+          // Locked rows: always "Ask me first" (true)
+          deleteFiles: true,
+          paymentsOrTransfer: true,
+          passwordsOrPrivateData: true,
+          installOrUninstallSoftware: true,
         },
       };
     } catch {

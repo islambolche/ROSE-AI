@@ -55,9 +55,11 @@ export const IntegrationsSettings: React.FC<IntegrationsSettingsProps> = ({
 
   // Video Caption Tool State
   const [captionFile, setCaptionFile] = useState<File | null>(null);
+  const [userProvidedCaptionText, setUserProvidedCaptionText] = useState<string>('');
   const [isProcessingCaption, setIsProcessingCaption] = useState(false);
+  const [captionError, setCaptionError] = useState<string | null>(null);
   const [captionResults, setRoseCaptionResults] = useState<{
-    youtube: { caption: string; hashtags: string; tags: string };
+    youtube: { shortCaption: string; longCaption: string; hashtags: string; tags: string };
     facebook: { caption: string; hashtags: string; tags: string };
     tiktok: { caption: string; hashtags: string; tags: string };
   } | null>(null);
@@ -113,53 +115,110 @@ export const IntegrationsSettings: React.FC<IntegrationsSettingsProps> = ({
     }, 1000);
   };
 
+  useEffect(() => {
+    setLocalIntegrations(integrations);
+  }, [integrations]);
+
   const handleConnectYouTube = () => {
-    const { clientId } = localIntegrations.youtube;
-    if (!clientId) {
-      onToast('প্রথমে Client ID সেভ করুন');
+    const cleanedClientId = cleanApiKey(localIntegrations.youtube.clientId || '');
+    if (!cleanedClientId) {
+      setConnectionStates(prev => ({
+        ...prev,
+        youtube: { status: 'error', message: 'প্রথমে OAuth Client ID দিন' }
+      }));
+      onToast('প্রথমে OAuth Client ID দিন');
       return;
     }
 
-    if (!(window as any).google) {
+    if (!(window as any).google?.accounts?.oauth2) {
+      setConnectionStates(prev => ({
+        ...prev,
+        youtube: { status: 'error', message: 'Google Identity Services লোড হয়নি' }
+      }));
       onToast('Google API লোড হচ্ছে, একটু অপেক্ষা করুন');
       return;
     }
 
     try {
       const client = (window as any).google.accounts.oauth2.initTokenClient({
-        client_id: clientId,
+        client_id: cleanedClientId,
         scope: 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.force-ssl',
         callback: (response: any) => {
+          if (response.error) {
+            const errMsg = response.error_description || response.error;
+            setConnectionStates(prev => ({
+              ...prev,
+              youtube: { status: 'error', message: errMsg }
+            }));
+            onToast(`YouTube ত্রুটি: ${errMsg}`);
+            return;
+          }
           if (response.access_token) {
             const updated = { 
               ...localIntegrations, 
               youtube: { 
-                ...localIntegrations.youtube, 
+                ...localIntegrations.youtube,
+                clientId: cleanedClientId,
                 accessToken: response.access_token,
-                expiryDate: Date.now() + (response.expires_in * 1000)
+                expiryDate: Date.now() + ((response.expires_in || 3600) * 1000)
               } 
             };
             setLocalIntegrations(updated);
             onSaveIntegrations(updated);
             setConnectionStates(prev => ({
               ...prev,
-              youtube: { status: 'ready', message: 'সংযুক্ত (Token Received)' }
+              youtube: { status: 'ready', message: 'READY - সংযুক্ত' }
             }));
             onToast('YouTube সংযোগ সফল!');
-          } else if (response.error) {
-            onToast(`ত্রুটি: ${response.error}`);
           }
         },
+        error_callback: (err: any) => {
+          const errMsg = err?.message || err?.type || 'OAuth সংযোগ ব্যর্থ';
+          setConnectionStates(prev => ({
+            ...prev,
+            youtube: { status: 'error', message: errMsg }
+          }));
+          onToast(`YouTube ত্রুটি: ${errMsg}`);
+        }
       });
       client.requestAccessToken();
     } catch (err: any) {
-      onToast('YouTube Connect শুরু করতে সমস্যা হয়েছে');
+      const errMsg = err?.message || 'YouTube Connect শুরু করতে সমস্যা হয়েছে';
+      setConnectionStates(prev => ({
+        ...prev,
+        youtube: { status: 'error', message: errMsg }
+      }));
+      onToast(errMsg);
     }
+  };
+
+  const handleSaveYouTube = () => {
+    const cleanedClientId = cleanApiKey(localIntegrations.youtube.clientId || '');
+    const updatedYoutube = {
+      ...localIntegrations.youtube,
+      clientId: cleanedClientId,
+    };
+    const updated = { ...localIntegrations, youtube: updatedYoutube };
+    setLocalIntegrations(updated);
+    onSaveIntegrations(updated);
+    onToast('YouTube OAuth Client ID সেভ করা হয়েছে');
+
+    setConnectionStates(prev => ({
+      ...prev,
+      youtube: {
+        status: updatedYoutube.accessToken ? 'ready' : 'not_set',
+        message: updatedYoutube.accessToken ? prev.youtube?.message || 'সফলভাবে সংযুক্ত' : (cleanedClientId ? 'Client ID সেভ হয়েছে' : '')
+      }
+    }));
   };
 
   const handleTestYouTube = async () => {
     const { accessToken } = localIntegrations.youtube;
     if (!accessToken) {
+      setConnectionStates(prev => ({
+        ...prev,
+        youtube: { status: 'error', message: 'প্রথমে Connect YouTube বাটনে ক্লিক করে সংযুক্ত করুন' }
+      }));
       onToast('প্রথমে YouTube কানেক্ট করুন');
       return;
     }
@@ -178,7 +237,7 @@ export const IntegrationsSettings: React.FC<IntegrationsSettingsProps> = ({
       });
       const data = await response.json();
       
-      if (data.items && data.items.length > 0) {
+      if (response.ok && data.items && data.items.length > 0) {
         const channelName = data.items[0].snippet.title;
         setConnectionStates(prev => ({
           ...prev,
@@ -186,7 +245,7 @@ export const IntegrationsSettings: React.FC<IntegrationsSettingsProps> = ({
         }));
         onToast(`YouTube সংযোগ সফল: ${channelName}`);
       } else {
-        const errMsg = data.error?.message || 'চ্যানেল পাওয়া যায়নি';
+        const errMsg = data.error?.message || 'কোনো YouTube চ্যানেল পাওয়া যায়নি';
         setConnectionStates(prev => ({
           ...prev,
           youtube: { status: 'error', message: errMsg }
@@ -201,6 +260,131 @@ export const IntegrationsSettings: React.FC<IntegrationsSettingsProps> = ({
       onToast('YouTube সংযোগ ব্যর্থ');
     } finally {
       setIsVerifying(prev => ({ ...prev, youtube: false }));
+    }
+  };
+
+  const handleConnectGmail = () => {
+    const cleanedClientId = cleanApiKey(
+      localIntegrations.youtube.clientId || localIntegrations.gmail.clientId || ''
+    );
+    if (!cleanedClientId) {
+      setConnectionStates(prev => ({
+        ...prev,
+        gmail: { status: 'error', message: 'প্রথমে YouTube কার্ডে OAuth Client ID সেভ করুন' }
+      }));
+      onToast('প্রথমে OAuth Client ID দিন');
+      return;
+    }
+
+    if (!(window as any).google?.accounts?.oauth2) {
+      setConnectionStates(prev => ({
+        ...prev,
+        gmail: { status: 'error', message: 'Google Identity Services লোড হয়নি' }
+      }));
+      onToast('Google API লোড হচ্ছে, একটু অপেক্ষা করুন');
+      return;
+    }
+
+    try {
+      const client = (window as any).google.accounts.oauth2.initTokenClient({
+        client_id: cleanedClientId,
+        scope: 'https://www.googleapis.com/auth/gmail.send',
+        callback: (response: any) => {
+          if (response.error) {
+            const errMsg = response.error_description || response.error;
+            setConnectionStates(prev => ({
+              ...prev,
+              gmail: { status: 'error', message: errMsg }
+            }));
+            onToast(`Gmail ত্রুটি: ${errMsg}`);
+            return;
+          }
+          if (response.access_token) {
+            const updated = {
+              ...localIntegrations,
+              gmail: {
+                ...localIntegrations.gmail,
+                clientId: cleanedClientId,
+                accessToken: response.access_token,
+                expiryDate: Date.now() + ((response.expires_in || 3600) * 1000),
+              },
+            };
+            setLocalIntegrations(updated);
+            onSaveIntegrations(updated);
+            setConnectionStates(prev => ({
+              ...prev,
+              gmail: { status: 'ready', message: 'READY - সংযুক্ত' }
+            }));
+            onToast('Gmail সংযোগ সফল!');
+          }
+        },
+        error_callback: (err: any) => {
+          const errMsg = err?.message || err?.type || 'OAuth সংযোগ ব্যর্থ';
+          setConnectionStates(prev => ({
+            ...prev,
+            gmail: { status: 'error', message: errMsg }
+          }));
+          onToast(`Gmail ত্রুটি: ${errMsg}`);
+        }
+      });
+      client.requestAccessToken();
+    } catch (err: any) {
+      const errMsg = err?.message || 'Gmail Connect শুরু করতে সমস্যা হয়েছে';
+      setConnectionStates(prev => ({
+        ...prev,
+        gmail: { status: 'error', message: errMsg }
+      }));
+      onToast(errMsg);
+    }
+  };
+
+  const handleTestGmail = async () => {
+    const { accessToken } = localIntegrations.gmail;
+    if (!accessToken) {
+      setConnectionStates(prev => ({
+        ...prev,
+        gmail: { status: 'error', message: 'প্রথমে Connect Gmail বাটনে ক্লিক করে সংযুক্ত করুন' }
+      }));
+      onToast('প্রথমে Gmail কানেক্ট করুন');
+      return;
+    }
+
+    setIsVerifying(prev => ({ ...prev, gmail: true }));
+    setConnectionStates(prev => ({
+      ...prev,
+      gmail: { status: 'checking', message: 'যাচাই করা হচ্ছে...' }
+    }));
+
+    try {
+      const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`
+        }
+      });
+      const data = await response.json();
+
+      if (response.ok && data.emailAddress) {
+        setConnectionStates(prev => ({
+          ...prev,
+          gmail: { status: 'ready', message: `READY - ${data.emailAddress}` }
+        }));
+        onToast(`Gmail সংযোগ সফল: ${data.emailAddress}`);
+      } else {
+        const errMsg = data.error?.message || 'Gmail প্রোফাইল পাওয়া যায়নি';
+        setConnectionStates(prev => ({
+          ...prev,
+          gmail: { status: 'error', message: errMsg }
+        }));
+        onToast(`Gmail ত্রুটি: ${errMsg}`);
+      }
+    } catch (err: any) {
+      setConnectionStates(prev => ({
+        ...prev,
+        gmail: { status: 'error', message: err.message || 'নেটওয়ার্ক ত্রুটি' }
+      }));
+      onToast('Gmail সংযোগ ব্যর্থ');
+    } finally {
+      setIsVerifying(prev => ({ ...prev, gmail: false }));
     }
   };
 
@@ -272,45 +456,261 @@ export const IntegrationsSettings: React.FC<IntegrationsSettingsProps> = ({
 
   const handleVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) setCaptionFile(file);
+    if (file) {
+      setCaptionFile(file);
+      setCaptionError(null);
+    }
+  };
+
+  const handleCopyText = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      onToast(`${label} কপি করা হয়েছে`);
+    } catch {
+      onToast('কপি করা যায়নি');
+    }
+  };
+
+  const fileToBase64 = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = String(reader.result || '');
+        const commaIdx = result.indexOf(',');
+        resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
+      };
+      reader.onerror = () => reject(new Error('ভিডিও ফাইল পড়া যায়নি'));
+      reader.readAsDataURL(file);
+    });
+
+  const uploadVideoViaGeminiFileApi = async (
+    file: File,
+    apiKey: string
+  ): Promise<{ fileUri: string; mimeType: string }> => {
+    const mimeType = file.type || 'video/mp4';
+    const startRes = await fetch(
+      `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: 'POST',
+        headers: {
+          'X-Goog-Upload-Protocol': 'resumable',
+          'X-Goog-Upload-Command': 'start',
+          'X-Goog-Upload-Header-Content-Length': String(file.size),
+          'X-Goog-Upload-Header-Content-Type': mimeType,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          file: { display_name: file.name },
+        }),
+      }
+    );
+
+    if (!startRes.ok) {
+      const errData = await startRes.json().catch(() => ({}));
+      throw new Error(
+        errData.error?.message || `Gemini File Upload Init Error (${startRes.status})`
+      );
+    }
+
+    const uploadUrl = startRes.headers.get('x-goog-upload-url');
+    if (!uploadUrl) {
+      throw new Error('Gemini File API থেকে upload URL পাওয়া যায়নি');
+    }
+
+    const uploadRes = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Length': String(file.size),
+        'X-Goog-Upload-Offset': '0',
+        'X-Goog-Upload-Command': 'upload, finalize',
+      },
+      body: file,
+    });
+
+    const uploadData = await uploadRes.json().catch(() => ({}));
+    if (!uploadRes.ok || !uploadData.file?.uri) {
+      throw new Error(
+        uploadData.error?.message || `Gemini File Upload Error (${uploadRes.status})`
+      );
+    }
+
+    const fileUri: string = uploadData.file.uri;
+    const fileName: string = uploadData.file.name;
+
+    // Wait until video processing state is ACTIVE
+    for (let i = 0; i < 15; i++) {
+      const state = uploadData.file?.state;
+      if (state === 'ACTIVE' && i === 0) break;
+      await new Promise((r) => setTimeout(r, 2000));
+      const checkRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/${fileName}?key=${encodeURIComponent(apiKey)}`
+      );
+      const checkData = await checkRes.json().catch(() => ({}));
+      if (checkData.state === 'ACTIVE') break;
+      if (checkData.state === 'FAILED') {
+        throw new Error('Gemini সার্ভারে ভিডিও প্রসেসিং ব্যর্থ হয়েছে');
+      }
+    }
+
+    return { fileUri, mimeType };
   };
 
   const generateCaptions = async () => {
-    if (!captionFile || !geminiKey) {
-        onToast(geminiKey ? 'ভিডিও ফাইল নির্বাচন করুন' : 'Gemini কী প্রয়োজন');
-        return;
+    const activeGeminiKey = cleanApiKey(geminiKey || '');
+    if (!captionFile || !activeGeminiKey) {
+      onToast(activeGeminiKey ? 'ভিডিও ফাইল নির্বাচন করুন' : 'Settings > Connections-এ Gemini কী সেভ করুন');
+      return;
     }
+
     setIsProcessingCaption(true);
+    setCaptionError(null);
+
     try {
-        // Here we would typically upload the file to a temporary storage or send as base64
-        // Since we are limited in complexity, we'll simulate the call to Gemini API
-        const response = await fetch('/api/gemini/generate', {
+      const mimeType = captionFile.type || 'video/mp4';
+      let videoPart: any;
+
+      // Use inline_data for videos <= 18MB, otherwise Gemini File API resumable upload
+      if (captionFile.size <= 18 * 1024 * 1024) {
+        const base64Data = await fileToBase64(captionFile);
+        videoPart = {
+          inline_data: {
+            mime_type: mimeType,
+            data: base64Data,
+          },
+        };
+      } else {
+        const uploaded = await uploadVideoViaGeminiFileApi(captionFile, activeGeminiKey);
+        videoPart = {
+          file_data: {
+            mime_type: uploaded.mimeType,
+            file_uri: uploaded.fileUri,
+          },
+        };
+      }
+
+      const exactUserText = userProvidedCaptionText;
+      const hasUserText = exactUserText.trim().length > 0;
+
+      const promptText = `Analyze this uploaded video carefully and return separate Bengali social media packages for YouTube, Facebook, and TikTok.
+Rules:
+1. Language: Strictly Bengali (বাংলা).
+2. For YouTube: provide a short caption (shortCaption), a long caption (longCaption), hashtags, and comma-separated tags.
+3. For Facebook: provide a caption, hashtags, and comma-separated tags.
+4. For TikTok: provide a caption, hashtags, and comma-separated tags (note: TikTok is caption, hashtags, and tags only, no upload).
+5. CRITICAL RULE: ${
+        hasUserText
+          ? `The user provided this exact text: ${JSON.stringify(
+              exactUserText
+            )}. Any text the user provided MUST be used EXACTLY as written, with nothing added or changed.`
+          : 'Write natural, engaging Bengali captions, hashtags, and tags based strictly on what is in the video.'
+      }
+
+Respond ONLY with valid JSON in this exact structure:
+{
+  "youtube": {
+    "shortCaption": "...",
+    "longCaption": "...",
+    "hashtags": "#...",
+    "tags": "tag1, tag2, tag3"
+  },
+  "facebook": {
+    "caption": "...",
+    "hashtags": "#...",
+    "tags": "tag1, tag2, tag3"
+  },
+  "tiktok": {
+    "caption": "...",
+    "hashtags": "#...",
+    "tags": "tag1, tag2, tag3"
+  }
+}`;
+
+      const modelsToTry = ['gemini-2.5-flash', 'gemini-2.5-pro'];
+      let responseData: any = null;
+      let lastErrorMsg = '';
+
+      for (const modelName of modelsToTry) {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(
+            activeGeminiKey
+          )}`,
+          {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                apiKey: geminiKey,
-                prompt: `Analyze this video (simulated) and provide separate captions, hashtags, and tags for YouTube, Facebook, and TikTok. 
-                Answer strictly in Bengali. 
-                Format: 
-                YOUTUBE: Caption: [text] Hashtags: [text] Tags: [text]
-                FACEBOOK: Caption: [text] Hashtags: [text] Tags: [text]
-                TIKTOK: Caption: [text] Hashtags: [text] Tags: [text]`,
-                model: 'gemini-3.8-flash'
-            })
-        });
-        const data = await response.json();
-        
-        // Mocking the extraction since we don't have the real video bytes yet in this simplified tool
-        setRoseCaptionResults({
-            youtube: { caption: 'নতুন ভিডিওতে স্বাগতম!', hashtags: '#YouTube #NewVideo', tags: 'tech, rose, ai' },
-            facebook: { caption: 'ফেসবুক বন্ধুদের জন্য বিশেষ ভিডিও।', hashtags: '#FacebookLive #Viral', tags: 'community, share' },
-            tiktok: { caption: 'টিকটক ট্রেন্ডিং ভিডিও!', hashtags: '#TikTokTrend #Shorts', tags: 'trending, music' },
-        });
-        onToast('ক্যাপশন তৈরি সফল হয়েছে');
-    } catch (err) {
-        onToast('ক্যাপশন তৈরিতে সমস্যা হয়েছে');
+              contents: [
+                {
+                  role: 'user',
+                  parts: [videoPart, { text: promptText }],
+                },
+              ],
+              generationConfig: {
+                responseMimeType: 'application/json',
+              },
+            }),
+          }
+        );
+
+        const json = await res.json().catch(() => ({}));
+        if (res.ok && json.candidates?.[0]?.content?.parts?.[0]?.text) {
+          responseData = json;
+          break;
+        }
+        lastErrorMsg = json.error?.message || `Gemini API Error (${res.status})`;
+      }
+
+      if (!responseData) {
+        throw new Error(lastErrorMsg || 'Gemini থেকে উত্তর পাওয়া যায়নি');
+      }
+
+      const rawText = String(responseData.candidates[0].content.parts[0].text || '')
+        .replace(/^```json\s*/i, '')
+        .replace(/```\s*$/i, '')
+        .trim();
+
+      const parsed = JSON.parse(rawText);
+
+      const finalResults = {
+        youtube: {
+          shortCaption: hasUserText ? exactUserText : String(parsed?.youtube?.shortCaption || ''),
+          longCaption: hasUserText ? exactUserText : String(parsed?.youtube?.longCaption || ''),
+          hashtags: String(parsed?.youtube?.hashtags || ''),
+          tags: String(parsed?.youtube?.tags || ''),
+        },
+        facebook: {
+          caption: hasUserText ? exactUserText : String(parsed?.facebook?.caption || ''),
+          hashtags: String(parsed?.facebook?.hashtags || ''),
+          tags: String(parsed?.facebook?.tags || ''),
+        },
+        tiktok: {
+          caption: hasUserText ? exactUserText : String(parsed?.tiktok?.caption || ''),
+          hashtags: String(parsed?.tiktok?.hashtags || ''),
+          tags: String(parsed?.tiktok?.tags || ''),
+        },
+      };
+
+      setRoseCaptionResults(finalResults);
+      try {
+        localStorage.setItem(
+          'rose_last_video_caption_yt',
+          JSON.stringify({
+            caption: finalResults.youtube.longCaption || finalResults.youtube.shortCaption,
+            shortCaption: finalResults.youtube.shortCaption,
+            longCaption: finalResults.youtube.longCaption,
+            hashtags: finalResults.youtube.hashtags,
+            tags: finalResults.youtube.tags,
+          })
+        );
+      } catch {
+        // ignore
+      }
+      onToast('ক্যাপশন তৈরি সফল হয়েছে');
+    } catch (err: any) {
+      const msg = err?.message || 'ক্যাপশন তৈরিতে সমস্যা হয়েছে';
+      setCaptionError(msg);
+      onToast(msg);
     } finally {
-        setIsProcessingCaption(false);
+      setIsProcessingCaption(false);
     }
   };
 
@@ -496,23 +896,25 @@ export const IntegrationsSettings: React.FC<IntegrationsSettingsProps> = ({
           <div className="flex justify-between items-center gap-2 pt-2 border-t border-sky-950/60">
              <button 
                onClick={handleConnectYouTube}
-               className="flex-1 py-1.5 rounded-xl bg-[#071738] border border-sky-500/40 text-sky-300 text-xs font-bold flex items-center justify-center gap-2 hover:bg-[#0b2150] transition-all"
+               disabled={isVerifying.youtube}
+               className="flex-1 py-1.5 rounded-xl bg-[#071738] border border-sky-500/40 text-sky-300 text-xs font-bold flex items-center justify-center gap-2 hover:bg-[#0b2150] transition-all disabled:opacity-50"
              >
                  <ExternalLink className="w-3.5 h-3.5" />
-                 Connect Channel
+                 Connect YouTube
              </button>
              <div className="flex items-center gap-2">
                <button 
                  onClick={handleTestYouTube} 
-                 disabled={isVerifying.youtube || !localIntegrations.youtube.accessToken}
+                 disabled={isVerifying.youtube}
                  className="px-3 py-1.5 rounded-xl bg-[#071738] hover:bg-[#0b2150] border border-sky-500/40 text-sky-200 hover:text-white text-xs font-extrabold flex items-center gap-1.5 transition-all disabled:opacity-50"
                >
                  {isVerifying.youtube ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current text-sky-400" />}
                  <span>Test</span>
                </button>
                <button 
-                 onClick={() => handleSaveField('youtube', localIntegrations.youtube)} 
-                 className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 hover:from-blue-500 hover:to-sky-400 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-[0_0_12px_rgba(56,189,248,0.3)] transition-all"
+                 onClick={handleSaveYouTube} 
+                 disabled={isVerifying.youtube}
+                 className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 hover:from-blue-500 hover:to-sky-400 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-[0_0_12px_rgba(56,189,248,0.3)] transition-all disabled:opacity-50"
                >
                  <Check className="w-3.5 h-3.5 stroke-[3]" />
                  <span>Save</span>
@@ -649,113 +1051,456 @@ export const IntegrationsSettings: React.FC<IntegrationsSettingsProps> = ({
         </div>
 
         {/* Gmail Card */}
-        <div className="p-4 rounded-2xl bg-[#081533] border border-sky-500/40 space-y-3">
+        <div className="p-4 rounded-2xl bg-[#081533] border border-sky-500/40 space-y-3 shadow-sm transition-all">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-300 flex items-center justify-center border border-white/10">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-300 flex items-center justify-center border border-white/10 shadow-[0_0_10px_rgba(245,158,11,0.2)]">
                 <Mail className="w-5 h-5" />
               </div>
               <div>
-                <h4 className="text-xs font-black text-white tracking-wider">Gmail</h4>
-                <p className="text-[10px] text-sky-200/80">(Job Applications)</p>
+                <h4 className="text-xs font-black text-white tracking-wider font-display">Gmail</h4>
+                <p className="text-[10px] text-sky-200/80">(Google OAuth • Job Applications)</p>
               </div>
             </div>
             {renderStatusBadge(connectionStates.gmail.status)}
           </div>
-          <div className="flex justify-between items-center gap-2 pt-1">
-             <button className="flex-1 py-2 rounded-xl bg-[#071738] border border-sky-500/40 text-sky-300 text-xs font-bold flex items-center justify-center gap-2">
-                 <ExternalLink className="w-4 h-4" />
-                 Authorize Gmail
-             </button>
-             <button onClick={() => handleTest('gmail')} className="px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 text-white text-xs font-extrabold">Test</button>
+
+          <div className="space-y-2.5">
+            <div className="space-y-1">
+              <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest ml-1">
+                OAuth Client ID (Shared with YouTube)
+              </label>
+              <input
+                type="text"
+                value={localIntegrations.youtube.clientId || localIntegrations.gmail.clientId}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setLocalIntegrations((prev) => ({
+                    ...prev,
+                    youtube: { ...prev.youtube, clientId: val },
+                    gmail: { ...prev.gmail, clientId: val },
+                  }));
+                }}
+                placeholder="e.g. 123456...apps.googleusercontent.com"
+                className="w-full bg-[#050c20] border border-sky-900/80 focus:border-sky-400 focus:shadow-[0_0_10px_rgba(56,189,248,0.15)] rounded-xl px-3 py-1.5 text-xs font-mono text-white placeholder-slate-600 focus:outline-none transition-all"
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between text-[11px] px-1">
+            {connectionStates.gmail.message && (
+              <span
+                className={`font-semibold truncate ${
+                  connectionStates.gmail.status === 'ready'
+                    ? 'text-emerald-400'
+                    : connectionStates.gmail.status === 'error'
+                    ? 'text-rose-400'
+                    : 'text-slate-400'
+                }`}
+              >
+                {connectionStates.gmail.message}
+              </span>
+            )}
+            {localIntegrations.gmail.accessToken && (
+              <span className="font-mono text-[9px] text-slate-500 ml-auto">
+                Token Active
+              </span>
+            )}
+          </div>
+
+          <div className="flex justify-between items-center gap-2 pt-2 border-t border-sky-950/60">
+            <button
+              onClick={handleConnectGmail}
+              disabled={isVerifying.gmail}
+              className="flex-1 py-1.5 rounded-xl bg-[#071738] border border-sky-500/40 text-sky-300 text-xs font-bold flex items-center justify-center gap-2 hover:bg-[#0b2150] transition-all disabled:opacity-50"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              Connect Gmail
+            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleTestGmail}
+                disabled={isVerifying.gmail}
+                className="px-3 py-1.5 rounded-xl bg-[#071738] hover:bg-[#0b2150] border border-sky-500/40 text-sky-200 hover:text-white text-xs font-extrabold flex items-center gap-1.5 transition-all disabled:opacity-50"
+              >
+                {isVerifying.gmail ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Play className="w-3.5 h-3.5 fill-current text-sky-400" />
+                )}
+                <span>Test</span>
+              </button>
+              <button
+                onClick={handleSaveYouTube}
+                disabled={isVerifying.gmail}
+                className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 hover:from-blue-500 hover:to-sky-400 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-[0_0_12px_rgba(56,189,248,0.3)] transition-all disabled:opacity-50"
+              >
+                <Check className="w-3.5 h-3.5 stroke-[3]" />
+                <span>Save</span>
+              </button>
+            </div>
           </div>
         </div>
 
         {/* Video Caption Tool Section */}
         <div className="p-5 rounded-3xl bg-gradient-to-br from-[#0a1b42] to-[#07112d] border border-indigo-500/30 shadow-xl space-y-4">
-            <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-indigo-500/20 border border-indigo-400/40 flex items-center justify-center text-indigo-300 shadow-[0_0_15px_rgba(99,102,241,0.3)]">
-                    <Video className="w-5 h-5" />
-                </div>
-                <div>
-                    <h4 className="text-sm font-black text-white tracking-wide uppercase">Video Caption Tool</h4>
-                    <p className="text-[11px] text-indigo-200/70">Gemini-র সাহায্যে ভিডিওর জন্য অটো-ক্যাপশন তৈরি করুন</p>
-                </div>
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-indigo-500/20 border border-indigo-400/40 flex items-center justify-center text-indigo-300 shadow-[0_0_15px_rgba(99,102,241,0.3)]">
+              <Video className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="text-sm font-black text-white tracking-wide uppercase">Video Caption Tool</h4>
+              <p className="text-[11px] text-indigo-200/70">
+                Gemini ভিডিও ইনপুট ব্যবহার করে YouTube, Facebook ও TikTok-এর বাংলা ক্যাপশন, হ্যাশট্যাগ ও ট্যাগ
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="relative group">
+              <input
+                type="file"
+                accept="video/*"
+                onChange={handleVideoUpload}
+                className="hidden"
+                id="video-upload-input"
+              />
+              <label
+                htmlFor="video-upload-input"
+                className="flex flex-col items-center justify-center w-full h-28 rounded-2xl border-2 border-dashed border-sky-800 bg-[#050c20]/60 hover:bg-[#07153d]/80 hover:border-sky-400 transition-all cursor-pointer group"
+              >
+                {captionFile ? (
+                  <div className="flex flex-col items-center text-center">
+                    <Check className="w-7 h-7 text-emerald-400 mb-1.5" />
+                    <span className="text-xs font-bold text-white truncate max-w-[240px]">
+                      {captionFile.name}
+                    </span>
+                    <span className="text-[10px] text-slate-400 mt-0.5">
+                      {(captionFile.size / (1024 * 1024)).toFixed(2)} MB
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center text-center">
+                    <Upload className="w-7 h-7 text-sky-400 mb-1.5 group-hover:scale-110 transition-transform" />
+                    <span className="text-xs font-bold text-slate-300">ভিডিও ফাইল আপলোড করুন</span>
+                    <span className="text-[10px] text-slate-500 mt-0.5">
+                      MP4, MOV, WEBM, AVI (Gemini Inline / File API)
+                    </span>
+                  </div>
+                )}
+              </label>
             </div>
 
-            <div className="space-y-3">
-                <div className="relative group">
-                    <input
-                        type="file"
-                        accept="video/*"
-                        onChange={handleVideoUpload}
-                        className="hidden"
-                        id="video-upload-input"
-                    />
-                    <label
-                        htmlFor="video-upload-input"
-                        className="flex flex-col items-center justify-center w-full h-32 rounded-2xl border-2 border-dashed border-sky-800 bg-[#050c20]/60 hover:bg-[#07153d]/80 hover:border-sky-400 transition-all cursor-pointer group"
-                    >
-                        {captionFile ? (
-                            <div className="flex flex-col items-center text-center">
-                                <Check className="w-8 h-8 text-emerald-400 mb-2" />
-                                <span className="text-xs font-bold text-white truncate max-w-[200px]">{captionFile.name}</span>
-                                <span className="text-[10px] text-slate-400 mt-1">{(captionFile.size / (1024 * 1024)).toFixed(1)} MB</span>
-                            </div>
-                        ) : (
-                            <div className="flex flex-col items-center text-center">
-                                <Upload className="w-8 h-8 text-sky-400 mb-2 group-hover:scale-110 transition-transform" />
-                                <span className="text-xs font-bold text-slate-300">ভিডিও ফাইল আপলোড করুন</span>
-                                <span className="text-[10px] text-slate-500 mt-1">MP4, MOV, AVI (Max 50MB)</span>
-                            </div>
-                        )}
-                    </label>
-                </div>
-
-                <button
-                    onClick={generateCaptions}
-                    disabled={!captionFile || isProcessingCaption}
-                    className="w-full py-3 rounded-2xl bg-gradient-to-r from-indigo-600 via-purple-600 to-sky-500 hover:from-indigo-500 hover:to-sky-400 text-white font-black text-xs flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(99,102,241,0.4)] transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
-                >
-                    {isProcessingCaption ? (
-                        <Loader2 className="w-5 h-5 animate-spin" />
-                    ) : (
-                        <Sparkles className="w-5 h-5 group-hover:animate-pulse" />
-                    )}
-                    <span>CREATE CAPTIONS IN BENGALI</span>
-                </button>
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-slate-300 block">
+                আপনার লেখা (ঐচ্ছিক — যা লিখবেন হুবহু তাই থাকবে, কিছু যোগ বা পরিবর্তন হবে না)
+              </label>
+              <textarea
+                rows={2}
+                value={userProvidedCaptionText}
+                onChange={(e) => setUserProvidedCaptionText(e.target.value)}
+                placeholder="আপনি কোনো নির্দিষ্ট টেক্সট বা ক্যাপশন দিতে চাইলে এখানে লিখুন..."
+                className="w-full bg-[#050c20] border border-sky-900/80 focus:border-sky-400 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none resize-none"
+              />
             </div>
 
-            {captionResults && (
-                <div className="space-y-3 animate-in slide-in-from-top-4 duration-300">
-                    {Object.entries(captionResults).map(([platform, data]) => (
-                        <div key={platform} className="p-4 rounded-2xl bg-black/40 border border-white/5 space-y-2.5">
-                            <div className="flex items-center gap-2">
-                                {platform === 'youtube' && <Youtube className="w-4 h-4 text-rose-400" />}
-                                {platform === 'facebook' && <Facebook className="w-4 h-4 text-blue-400" />}
-                                {platform === 'tiktok' && <Music2 className="w-4 h-4 text-pink-400" />}
-                                <span className="text-[10px] font-black uppercase text-white tracking-widest">{platform} Pack</span>
-                            </div>
-                            <div className="space-y-2">
-                                <div className="space-y-1">
-                                    <span className="text-[9px] font-bold text-slate-500 uppercase">Caption</span>
-                                    <p className="text-xs text-slate-200 leading-relaxed bg-black/30 p-2.5 rounded-xl border border-white/5">{data.caption}</p>
-                                </div>
-                                <div className="grid grid-cols-2 gap-2">
-                                    <div className="space-y-1">
-                                        <span className="text-[9px] font-bold text-slate-500 uppercase">Hashtags</span>
-                                        <div className="text-[10px] text-sky-400 font-mono bg-black/30 p-2 rounded-xl border border-white/5">{data.hashtags}</div>
-                                    </div>
-                                    <div className="space-y-1">
-                                        <span className="text-[9px] font-bold text-slate-500 uppercase">Tags</span>
-                                        <div className="text-[10px] text-slate-400 font-mono bg-black/30 p-2 rounded-xl border border-white/5">{data.tags}</div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    ))}
-                </div>
+            {captionError && (
+              <div className="p-2.5 rounded-xl bg-rose-950/60 border border-rose-500/40 text-[11px] text-rose-300 font-semibold">
+                ত্রুটি: {captionError}
+              </div>
             )}
+
+            <button
+              type="button"
+              onClick={generateCaptions}
+              disabled={!captionFile || isProcessingCaption}
+              className="w-full py-3 rounded-2xl bg-gradient-to-r from-indigo-600 via-purple-600 to-sky-500 hover:from-indigo-500 hover:to-sky-400 text-white font-black text-xs flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(99,102,241,0.4)] transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
+            >
+              {isProcessingCaption ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <Sparkles className="w-5 h-5 group-hover:animate-pulse" />
+              )}
+              <span>CREATE CAPTIONS IN BENGALI</span>
+            </button>
+          </div>
+
+          {captionResults && (
+            <div className="space-y-3 animate-in slide-in-from-top-4 duration-300">
+              {/* YouTube Result Card */}
+              <div className="p-4 rounded-2xl bg-black/40 border border-white/10 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Youtube className="w-4 h-4 text-rose-400" />
+                    <span className="text-[11px] font-black uppercase text-white tracking-widest">
+                      YouTube
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleCopyText(
+                        `Short Caption:\n${captionResults.youtube.shortCaption}\n\nLong Caption:\n${captionResults.youtube.longCaption}\n\nHashtags:\n${captionResults.youtube.hashtags}\n\nTags:\n${captionResults.youtube.tags}`,
+                        'YouTube সব তথ্য'
+                      )
+                    }
+                    className="px-2.5 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-400/30 text-[10px] font-bold text-sky-300 flex items-center gap-1 transition-all"
+                  >
+                    <Clipboard className="w-3 h-3" />
+                    <span>Copy All</span>
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[9px] font-bold text-slate-400 uppercase">
+                        Short Caption (ছোট ক্যাপশন)
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleCopyText(captionResults.youtube.shortCaption, 'YouTube Short Caption')
+                        }
+                        className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-sky-300 flex items-center gap-1"
+                      >
+                        <Clipboard className="w-2.5 h-2.5" />
+                        <span>Copy</span>
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-200 whitespace-pre-wrap leading-relaxed bg-black/30 p-2.5 rounded-xl border border-white/5">
+                      {captionResults.youtube.shortCaption}
+                    </p>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[9px] font-bold text-slate-400 uppercase">
+                        Long Caption (বড় ক্যাপশন)
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleCopyText(captionResults.youtube.longCaption, 'YouTube Long Caption')
+                        }
+                        className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-sky-300 flex items-center gap-1"
+                      >
+                        <Clipboard className="w-2.5 h-2.5" />
+                        <span>Copy</span>
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-200 whitespace-pre-wrap leading-relaxed bg-black/30 p-2.5 rounded-xl border border-white/5">
+                      {captionResults.youtube.longCaption}
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[9px] font-bold text-slate-400 uppercase">Hashtags</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleCopyText(captionResults.youtube.hashtags, 'YouTube Hashtags')
+                          }
+                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-sky-300 flex items-center gap-1"
+                        >
+                          <Clipboard className="w-2.5 h-2.5" />
+                          <span>Copy</span>
+                        </button>
+                      </div>
+                      <div className="text-[10px] text-sky-400 font-mono bg-black/30 p-2 rounded-xl border border-white/5 break-words">
+                        {captionResults.youtube.hashtags}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[9px] font-bold text-slate-400 uppercase">Tags</span>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyText(captionResults.youtube.tags, 'YouTube Tags')}
+                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-sky-300 flex items-center gap-1"
+                        >
+                          <Clipboard className="w-2.5 h-2.5" />
+                          <span>Copy</span>
+                        </button>
+                      </div>
+                      <div className="text-[10px] text-slate-300 font-mono bg-black/30 p-2 rounded-xl border border-white/5 break-words">
+                        {captionResults.youtube.tags}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Facebook Result Card */}
+              <div className="p-4 rounded-2xl bg-black/40 border border-white/10 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Facebook className="w-4 h-4 text-blue-400" />
+                    <span className="text-[11px] font-black uppercase text-white tracking-widest">
+                      Facebook
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleCopyText(
+                        `Caption:\n${captionResults.facebook.caption}\n\nHashtags:\n${captionResults.facebook.hashtags}\n\nTags:\n${captionResults.facebook.tags}`,
+                        'Facebook সব তথ্য'
+                      )
+                    }
+                    className="px-2.5 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-400/30 text-[10px] font-bold text-sky-300 flex items-center gap-1 transition-all"
+                  >
+                    <Clipboard className="w-3 h-3" />
+                    <span>Copy All</span>
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[9px] font-bold text-slate-400 uppercase">Caption</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleCopyText(captionResults.facebook.caption, 'Facebook Caption')
+                        }
+                        className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-sky-300 flex items-center gap-1"
+                      >
+                        <Clipboard className="w-2.5 h-2.5" />
+                        <span>Copy</span>
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-200 whitespace-pre-wrap leading-relaxed bg-black/30 p-2.5 rounded-xl border border-white/5">
+                      {captionResults.facebook.caption}
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[9px] font-bold text-slate-400 uppercase">Hashtags</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleCopyText(captionResults.facebook.hashtags, 'Facebook Hashtags')
+                          }
+                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-sky-300 flex items-center gap-1"
+                        >
+                          <Clipboard className="w-2.5 h-2.5" />
+                          <span>Copy</span>
+                        </button>
+                      </div>
+                      <div className="text-[10px] text-sky-400 font-mono bg-black/30 p-2 rounded-xl border border-white/5 break-words">
+                        {captionResults.facebook.hashtags}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[9px] font-bold text-slate-400 uppercase">Tags</span>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyText(captionResults.facebook.tags, 'Facebook Tags')}
+                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-sky-300 flex items-center gap-1"
+                        >
+                          <Clipboard className="w-2.5 h-2.5" />
+                          <span>Copy</span>
+                        </button>
+                      </div>
+                      <div className="text-[10px] text-slate-300 font-mono bg-black/30 p-2 rounded-xl border border-white/5 break-words">
+                        {captionResults.facebook.tags}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* TikTok Result Card (No upload — only caption, hashtags & tags) */}
+              <div className="p-4 rounded-2xl bg-black/40 border border-white/10 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Music2 className="w-4 h-4 text-pink-400" />
+                    <span className="text-[11px] font-black uppercase text-white tracking-widest">
+                      TikTok (Only Caption, Hashtags & Tags — No Upload)
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleCopyText(
+                        `Caption:\n${captionResults.tiktok.caption}\n\nHashtags:\n${captionResults.tiktok.hashtags}\n\nTags:\n${captionResults.tiktok.tags}`,
+                        'TikTok সব তথ্য'
+                      )
+                    }
+                    className="px-2.5 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-400/30 text-[10px] font-bold text-sky-300 flex items-center gap-1 transition-all"
+                  >
+                    <Clipboard className="w-3 h-3" />
+                    <span>Copy All</span>
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[9px] font-bold text-slate-400 uppercase">Caption</span>
+                      <button
+                        type="button"
+                        onClick={() => handleCopyText(captionResults.tiktok.caption, 'TikTok Caption')}
+                        className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-sky-300 flex items-center gap-1"
+                      >
+                        <Clipboard className="w-2.5 h-2.5" />
+                        <span>Copy</span>
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-200 whitespace-pre-wrap leading-relaxed bg-black/30 p-2.5 rounded-xl border border-white/5">
+                      {captionResults.tiktok.caption}
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[9px] font-bold text-slate-400 uppercase">Hashtags</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleCopyText(captionResults.tiktok.hashtags, 'TikTok Hashtags')
+                          }
+                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-sky-300 flex items-center gap-1"
+                        >
+                          <Clipboard className="w-2.5 h-2.5" />
+                          <span>Copy</span>
+                        </button>
+                      </div>
+                      <div className="text-[10px] text-sky-400 font-mono bg-black/30 p-2 rounded-xl border border-white/5 break-words">
+                        {captionResults.tiktok.hashtags}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[9px] font-bold text-slate-400 uppercase">Tags</span>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyText(captionResults.tiktok.tags, 'TikTok Tags')}
+                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-sky-300 flex items-center gap-1"
+                        >
+                          <Clipboard className="w-2.5 h-2.5" />
+                          <span>Copy</span>
+                        </button>
+                      </div>
+                      <div className="text-[10px] text-slate-300 font-mono bg-black/30 p-2 rounded-xl border border-white/5 break-words">
+                        {captionResults.tiktok.tags}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

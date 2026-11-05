@@ -16,9 +16,13 @@ import {
   XCircle,
   Youtube,
   Facebook,
+  MessageCircle,
   ExternalLink,
+  Mail,
+  Upload,
 } from 'lucide-react';
 import { IDENTITY_AGENTS_MAP } from '../config/identity';
+import { setYouTubeUploadFile, setFacebookMediaFile } from '../lib/commands';
 
 interface ChatBoxProps {
   selectedAgent: Agent;
@@ -66,6 +70,8 @@ export const ChatBox: React.FC<ChatBoxProps> = ({
 }) => {
   const [inputText, setInputText] = useState('');
   const [expandedAskIds, setExpandedAskIds] = useState<Record<string, boolean>>({});
+  const [ytReplyDrafts, setYtReplyDrafts] = useState<Record<string, string>>({});
+  const [fbReplyDrafts, setFbReplyDrafts] = useState<Record<string, string>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -409,6 +415,753 @@ export const ChatBox: React.FC<ChatBoxProps> = ({
                     </div>
                   )}
 
+                  {msg.bill && (
+                    <div className="mt-3 p-4 rounded-2xl bg-black/40 border border-white/10 space-y-3 animate-in zoom-in-95 duration-200">
+                      <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-lg bg-emerald-500/20 flex items-center justify-center text-emerald-400">
+                            <MessageCircle className="w-4 h-4" />
+                          </div>
+                          <span className="text-[11px] font-black text-white uppercase tracking-wider">WhatsApp Bill</span>
+                        </div>
+                        <span className="text-[10px] font-bold text-slate-500">{msg.bill.customerName}</span>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        {msg.bill.items.map((item, idx) => (
+                          <div key={idx} className="flex justify-between text-[11px]">
+                            <span className="text-slate-300">{item.name} <span className="text-slate-500">x{item.quantity}</span></span>
+                            <span className="text-white font-mono">{item.price * item.quantity} ৳</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="flex justify-between items-center pt-2 border-t border-white/5 font-black">
+                        <span className="text-[10px] text-slate-400 uppercase">Total Amount</span>
+                        <span className="text-emerald-400 font-mono text-sm">{msg.bill.total} ৳</span>
+                      </div>
+
+                      <button
+                        onClick={() => (window as any).onCommandAction?.(msg.id, 'whatsapp_bill')}
+                        className="w-full py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-green-500 hover:from-emerald-500 hover:to-green-400 text-white text-[11px] font-black transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/20 group"
+                      >
+                        <MessageCircle className="w-4 h-4 group-hover:scale-110 transition-transform" />
+                        <span>OPEN WHATSAPP</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {msg.emailDraft && (
+                    <div className="mt-3 p-3.5 rounded-2xl bg-black/40 border border-amber-500/30 space-y-2.5">
+                      <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-lg bg-amber-500/20 flex items-center justify-center text-amber-300 shrink-0">
+                            <Mail className="w-4 h-4" />
+                          </div>
+                          <span className="text-[11px] font-black text-white uppercase tracking-wider">
+                            Gmail Draft
+                          </span>
+                        </div>
+                        <span className="text-[10px] font-mono text-amber-300 truncate max-w-[160px]">
+                          {msg.emailDraft.to}
+                        </span>
+                      </div>
+
+                      <div className="space-y-1.5 text-[11px]">
+                        <div>
+                          <span className="text-slate-400 font-bold">To: </span>
+                          <span className="text-white font-mono">{msg.emailDraft.to}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 font-bold">Subject: </span>
+                          <span className="text-white font-semibold">{msg.emailDraft.subject}</span>
+                        </div>
+                        <div className="p-2.5 rounded-xl bg-black/40 border border-white/5 text-slate-200 whitespace-pre-wrap leading-relaxed max-h-44 overflow-y-auto">
+                          {msg.emailDraft.body}
+                        </div>
+                      </div>
+
+                      {msg.emailDraft.status === 'pending' ? (
+                        <div className="space-y-2 pt-1">
+                          <p className="text-[10px] text-amber-300/90 font-semibold">
+                            Approval required (Send email / apply for a job):
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => (window as any).onCommandAction?.(msg.id, 'gmail_approve')}
+                              className="flex-1 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-[10px] font-extrabold transition-colors flex items-center justify-center gap-1 shadow-sm"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              Approve & Send
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => (window as any).onCommandAction?.(msg.id, 'gmail_cancel')}
+                              className="flex-1 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold transition-colors flex items-center justify-center gap-1"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              Reject
+                            </button>
+                          </div>
+                        </div>
+                      ) : msg.emailDraft.status === 'sending' ? (
+                        <div className="text-[10px] font-bold text-amber-300 pt-1">
+                          Gmail API এর মাধ্যমে পাঠানো হচ্ছে...
+                        </div>
+                      ) : msg.emailDraft.status === 'sent' ? (
+                        <div className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-400 pt-1">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>ইমেইল সফলভাবে পাঠানো হয়েছে</span>
+                        </div>
+                      ) : msg.emailDraft.status === 'error' ? (
+                        <div className="space-y-2 pt-1">
+                          <div className="text-[10px] font-bold text-rose-400">
+                            ত্রুটি: {msg.emailDraft.error || 'ইমেইল পাঠানো যায়নি'}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => (window as any).onCommandAction?.(msg.id, 'gmail_approve')}
+                            className="w-full py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-300 text-[10px] font-extrabold transition-all"
+                          >
+                            Retry Send via Gmail
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 text-[10px] font-bold text-rose-400 pt-1">
+                          <XCircle className="w-3.5 h-3.5" />
+                          <span>বাতিল করা হয়েছে</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {msg.ytUpload && (
+                    <div className="mt-3 p-3.5 rounded-2xl bg-black/40 border border-rose-500/30 space-y-2.5">
+                      <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-lg bg-rose-500/20 flex items-center justify-center text-rose-400 shrink-0">
+                            <Youtube className="w-4 h-4" />
+                          </div>
+                          <span className="text-[11px] font-black text-white uppercase tracking-wider">
+                            YouTube Video Upload
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5 text-[11px]">
+                        <div>
+                          <span className="text-slate-400 font-bold">Title: </span>
+                          <span className="text-white font-semibold">{msg.ytUpload.title}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 font-bold">Description: </span>
+                          <span className="text-slate-200 whitespace-pre-wrap">{msg.ytUpload.description || '—'}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 font-bold">Tags: </span>
+                          <span className="text-sky-300 font-mono">
+                            {msg.ytUpload.tags.length > 0 ? msg.ytUpload.tags.join(', ') : '—'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Video File Selector */}
+                      <div className="p-2.5 rounded-xl bg-black/40 border border-white/10 space-y-1.5">
+                        <label className="text-[10px] font-bold text-slate-300 flex items-center gap-1.5 cursor-pointer">
+                          <Upload className="w-3.5 h-3.5 text-rose-400" />
+                          <span>
+                            {msg.ytUpload.fileName
+                              ? `Selected: ${msg.ytUpload.fileName}`
+                              : 'Select Video File to Upload'}
+                          </span>
+                          <input
+                            type="file"
+                            accept="video/*"
+                            className="hidden"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) {
+                                setYouTubeUploadFile(msg.id, f);
+                                (window as any).onCommandAction?.(msg.id, 'yt_file_selected', {
+                                  fileName: f.name,
+                                });
+                              }
+                            }}
+                          />
+                        </label>
+                      </div>
+
+                      {msg.ytUpload.status === 'pending' ? (
+                        <div className="space-y-2 pt-1">
+                          <p className="text-[10px] text-amber-300/90 font-semibold">
+                            Approval required (Post or reply on Facebook / YouTube):
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => (window as any).onCommandAction?.(msg.id, 'yt_upload_approve')}
+                              className="flex-1 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-[10px] font-extrabold transition-colors flex items-center justify-center gap-1 shadow-sm"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              Approve & Upload
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => (window as any).onCommandAction?.(msg.id, 'yt_upload_cancel')}
+                              className="flex-1 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold transition-colors flex items-center justify-center gap-1"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              Reject
+                            </button>
+                          </div>
+                        </div>
+                      ) : msg.ytUpload.status === 'uploading' ? (
+                        <div className="text-[10px] font-bold text-amber-300 pt-1">
+                          YouTube Resumable API দিয়ে ভিডিও আপলোড হচ্ছে...
+                        </div>
+                      ) : msg.ytUpload.status === 'uploaded' ? (
+                        <div className="space-y-1.5 pt-1">
+                          <div className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-400">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>ভিডিও সফলভাবে আপলোড হয়েছে!</span>
+                          </div>
+                          {msg.ytUpload.videoId && (
+                            <a
+                              href={`https://www.youtube.com/watch?v=${msg.ytUpload.videoId}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-[10px] font-bold text-sky-300 hover:underline"
+                            >
+                              <ExternalLink className="w-3 h-3" />
+                              Watch on YouTube ({msg.ytUpload.videoId})
+                            </a>
+                          )}
+                        </div>
+                      ) : msg.ytUpload.status === 'error' ? (
+                        <div className="space-y-2 pt-1">
+                          <div className="text-[10px] font-bold text-rose-400">
+                            ত্রুটি: {msg.ytUpload.error || 'ভিডিও আপলোড ব্যর্থ হয়েছে'}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => (window as any).onCommandAction?.(msg.id, 'yt_upload_approve')}
+                            className="w-full py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 text-rose-300 text-[10px] font-extrabold transition-all"
+                          >
+                            Retry Upload
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 text-[10px] font-bold text-rose-400 pt-1">
+                          <XCircle className="w-3.5 h-3.5" />
+                          <span>বাতিল করা হয়েছে</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {msg.ytComments && (
+                    <div className="mt-3 p-3.5 rounded-2xl bg-black/40 border border-rose-500/30 space-y-2.5">
+                      <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-lg bg-rose-500/20 flex items-center justify-center text-rose-400 shrink-0">
+                            <Youtube className="w-4 h-4" />
+                          </div>
+                          <span className="text-[11px] font-black text-white uppercase tracking-wider">
+                            YouTube Comments ({msg.ytComments.videoId})
+                          </span>
+                        </div>
+                      </div>
+
+                      {msg.ytComments.status === 'loading' ? (
+                        <div className="text-[10px] font-bold text-amber-300">
+                          কমেন্ট লোড হচ্ছে...
+                        </div>
+                      ) : msg.ytComments.status === 'error' ? (
+                        <div className="text-[10px] font-bold text-rose-400">
+                          ত্রুটি: {msg.ytComments.error || 'কমেন্ট লোড করা যায়নি'}
+                        </div>
+                      ) : msg.ytComments.comments.length === 0 ? (
+                        <div className="text-[11px] text-slate-400">কোনো কমেন্ট পাওয়া যায়নি।</div>
+                      ) : (
+                        <div className="space-y-2.5 max-h-60 overflow-y-auto pr-1">
+                          {msg.ytComments.comments.map((c) => {
+                            const draftKey = `${msg.id}_${c.topLevelCommentId}`;
+                            const draftVal = ytReplyDrafts[draftKey] || '';
+                            return (
+                              <div
+                                key={c.topLevelCommentId}
+                                className="p-2.5 rounded-xl bg-black/40 border border-white/10 space-y-1.5 text-[11px]"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="font-bold text-rose-300">{c.author}</span>
+                                  <span className="text-[9px] font-mono text-slate-500">
+                                    ID: {c.topLevelCommentId}
+                                  </span>
+                                </div>
+                                <p className="text-slate-200 whitespace-pre-wrap">{c.text}</p>
+                                <div className="flex items-center gap-1.5 pt-1">
+                                  <input
+                                    type="text"
+                                    value={draftVal}
+                                    onChange={(e) =>
+                                      setYtReplyDrafts((prev) => ({
+                                        ...prev,
+                                        [draftKey]: e.target.value,
+                                      }))
+                                    }
+                                    placeholder="রিপ্লাই লিখুন..."
+                                    className="flex-1 px-2.5 py-1 rounded-lg bg-[#040a1a] border border-sky-500/30 text-white text-[10px] focus:outline-none focus:border-sky-400"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (!draftVal.trim()) return;
+                                      (window as any).onCommandAction?.(msg.id, 'yt_prepare_reply', {
+                                        parentId: c.topLevelCommentId,
+                                        text: draftVal.trim(),
+                                      });
+                                      setYtReplyDrafts((prev) => ({ ...prev, [draftKey]: '' }));
+                                    }}
+                                    className="px-2.5 py-1 rounded-lg bg-rose-500 hover:bg-rose-400 text-white text-[10px] font-extrabold transition-colors shrink-0"
+                                  >
+                                    Reply
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {msg.ytReply && (
+                    <div className="mt-3 p-3.5 rounded-2xl bg-black/40 border border-rose-500/30 space-y-2.5">
+                      <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-lg bg-rose-500/20 flex items-center justify-center text-rose-400 shrink-0">
+                            <Youtube className="w-4 h-4" />
+                          </div>
+                          <span className="text-[11px] font-black text-white uppercase tracking-wider">
+                            YouTube Comment Reply
+                          </span>
+                        </div>
+                        <span className="text-[10px] font-mono text-rose-300 truncate max-w-[140px]">
+                          {msg.ytReply.parentId}
+                        </span>
+                      </div>
+
+                      <div className="space-y-1.5 text-[11px]">
+                        <div>
+                          <span className="text-slate-400 font-bold">Comment ID: </span>
+                          <span className="text-white font-mono">{msg.ytReply.parentId}</span>
+                        </div>
+                        <div className="p-2.5 rounded-xl bg-black/40 border border-white/5 text-slate-200 whitespace-pre-wrap">
+                          {msg.ytReply.text}
+                        </div>
+                      </div>
+
+                      {msg.ytReply.status === 'pending' ? (
+                        <div className="space-y-2 pt-1">
+                          <p className="text-[10px] text-amber-300/90 font-semibold">
+                            Approval required (Post or reply on Facebook / YouTube):
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => (window as any).onCommandAction?.(msg.id, 'yt_reply_approve')}
+                              className="flex-1 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-[10px] font-extrabold transition-colors flex items-center justify-center gap-1 shadow-sm"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              Approve & Reply
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => (window as any).onCommandAction?.(msg.id, 'yt_reply_cancel')}
+                              className="flex-1 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold transition-colors flex items-center justify-center gap-1"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              Reject
+                            </button>
+                          </div>
+                        </div>
+                      ) : msg.ytReply.status === 'posting' ? (
+                        <div className="text-[10px] font-bold text-amber-300 pt-1">
+                          YouTube-এ রিপ্লাই পোস্ট করা হচ্ছে...
+                        </div>
+                      ) : msg.ytReply.status === 'posted' ? (
+                        <div className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-400 pt-1">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>রিপ্লাই সফলভাবে পোস্ট করা হয়েছে</span>
+                        </div>
+                      ) : msg.ytReply.status === 'error' ? (
+                        <div className="space-y-2 pt-1">
+                          <div className="text-[10px] font-bold text-rose-400">
+                            ত্রুটি: {msg.ytReply.error || 'রিপ্লাই পোস্ট করা যায়নি'}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => (window as any).onCommandAction?.(msg.id, 'yt_reply_approve')}
+                            className="w-full py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 text-rose-300 text-[10px] font-extrabold transition-all"
+                          >
+                            Retry Reply
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 text-[10px] font-bold text-rose-400 pt-1">
+                          <XCircle className="w-3.5 h-3.5" />
+                          <span>বাতিল করা হয়েছে</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {msg.fbPost && (
+                    <div className="mt-3 p-3.5 rounded-2xl bg-black/40 border border-blue-500/30 space-y-2.5">
+                      <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-lg bg-blue-500/20 flex items-center justify-center text-blue-400 shrink-0">
+                            <Facebook className="w-4 h-4" />
+                          </div>
+                          <span className="text-[11px] font-black text-white uppercase tracking-wider">
+                            Facebook Page Post ({msg.fbPost.mediaType.toUpperCase()})
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5 text-[11px]">
+                        <div className="p-2.5 rounded-xl bg-black/40 border border-white/5 text-slate-200 whitespace-pre-wrap">
+                          {msg.fbPost.message || '—'}
+                        </div>
+                      </div>
+
+                      <div className="p-2.5 rounded-xl bg-black/40 border border-white/10 space-y-1.5">
+                        <label className="text-[10px] font-bold text-slate-300 flex items-center gap-1.5 cursor-pointer">
+                          <Upload className="w-3.5 h-3.5 text-blue-400" />
+                          <span>
+                            {msg.fbPost.fileName
+                              ? `Selected: ${msg.fbPost.fileName}`
+                              : msg.fbPost.mediaType === 'photo'
+                              ? 'Select Photo File to Upload'
+                              : msg.fbPost.mediaType === 'video'
+                              ? 'Select Video File to Upload'
+                              : 'Select Photo/Video (Optional)'}
+                          </span>
+                          <input
+                            type="file"
+                            accept={
+                              msg.fbPost.mediaType === 'photo'
+                                ? 'image/*'
+                                : msg.fbPost.mediaType === 'video'
+                                ? 'video/*'
+                                : 'image/*,video/*'
+                            }
+                            className="hidden"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) {
+                                setFacebookMediaFile(msg.id, f);
+                                const detectedType = f.type.startsWith('video/')
+                                  ? 'video'
+                                  : f.type.startsWith('image/')
+                                  ? 'photo'
+                                  : msg.fbPost?.mediaType || 'photo';
+                                (window as any).onCommandAction?.(msg.id, 'fb_file_selected', {
+                                  fileName: f.name,
+                                  mediaType: detectedType,
+                                });
+                              }
+                            }}
+                          />
+                        </label>
+                      </div>
+
+                      {msg.fbPost.status === 'pending' ? (
+                        <div className="space-y-2 pt-1">
+                          <p className="text-[10px] text-amber-300/90 font-semibold">
+                            Approval required (Post or reply on Facebook / YouTube):
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => (window as any).onCommandAction?.(msg.id, 'fb_post_approve')}
+                              className="flex-1 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-[10px] font-extrabold transition-colors flex items-center justify-center gap-1 shadow-sm"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              Approve & Post
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => (window as any).onCommandAction?.(msg.id, 'fb_post_cancel')}
+                              className="flex-1 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold transition-colors flex items-center justify-center gap-1"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              Reject
+                            </button>
+                          </div>
+                        </div>
+                      ) : msg.fbPost.status === 'posting' ? (
+                        <div className="text-[10px] font-bold text-amber-300 pt-1">
+                          Facebook Page-এ পোস্ট করা হচ্ছে...
+                        </div>
+                      ) : msg.fbPost.status === 'posted' ? (
+                        <div className="space-y-1 pt-1">
+                          <div className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-400">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>ফেসবুক পেজে সফলভাবে পোস্ট হয়েছে!</span>
+                          </div>
+                          {msg.fbPost.postId && (
+                            <p className="text-[10px] font-mono text-sky-300">
+                              Post ID: {msg.fbPost.postId}
+                            </p>
+                          )}
+                        </div>
+                      ) : msg.fbPost.status === 'error' ? (
+                        <div className="space-y-2 pt-1">
+                          <div className="text-[10px] font-bold text-rose-400">
+                            ত্রুটি: {msg.fbPost.error || 'ফেসবুক পোস্ট ব্যর্থ হয়েছে'}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => (window as any).onCommandAction?.(msg.id, 'fb_post_approve')}
+                            className="w-full py-1.5 rounded-lg bg-blue-500/20 hover:bg-blue-500/30 border border-blue-400/40 text-blue-300 text-[10px] font-extrabold transition-all"
+                          >
+                            Retry Post
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 text-[10px] font-bold text-rose-400 pt-1">
+                          <XCircle className="w-3.5 h-3.5" />
+                          <span>বাতিল করা হয়েছে</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {msg.fbComments && (
+                    <div className="mt-3 p-3.5 rounded-2xl bg-black/40 border border-blue-500/30 space-y-2.5">
+                      <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-lg bg-blue-500/20 flex items-center justify-center text-blue-400 shrink-0">
+                            <Facebook className="w-4 h-4" />
+                          </div>
+                          <span className="text-[11px] font-black text-white uppercase tracking-wider">
+                            Facebook Post Comments ({msg.fbComments.postId})
+                          </span>
+                        </div>
+                      </div>
+
+                      {msg.fbComments.status === 'loading' ? (
+                        <div className="text-[10px] font-bold text-amber-300">
+                          কমেন্ট লোড হচ্ছে...
+                        </div>
+                      ) : msg.fbComments.status === 'error' ? (
+                        <div className="text-[10px] font-bold text-rose-400">
+                          ত্রুটি: {msg.fbComments.error || 'কমেন্ট লোড করা যায়নি'}
+                        </div>
+                      ) : msg.fbComments.comments.length === 0 ? (
+                        <div className="text-[11px] text-slate-400">কোনো কমেন্ট পাওয়া যায়নি।</div>
+                      ) : (
+                        <div className="space-y-2.5 max-h-60 overflow-y-auto pr-1">
+                          {msg.fbComments.comments.map((c) => {
+                            const draftKey = `${msg.id}_${c.id}`;
+                            const draftVal = fbReplyDrafts[draftKey] || '';
+                            return (
+                              <div
+                                key={c.id}
+                                className="p-2.5 rounded-xl bg-black/40 border border-white/10 space-y-1.5 text-[11px]"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="font-bold text-blue-300">{c.author}</span>
+                                  <span className="text-[9px] font-mono text-slate-500">
+                                    ID: {c.id}
+                                  </span>
+                                </div>
+                                <p className="text-slate-200 whitespace-pre-wrap">{c.text}</p>
+                                <div className="flex items-center gap-1.5 pt-1">
+                                  <input
+                                    type="text"
+                                    value={draftVal}
+                                    onChange={(e) =>
+                                      setFbReplyDrafts((prev) => ({
+                                        ...prev,
+                                        [draftKey]: e.target.value,
+                                      }))
+                                    }
+                                    placeholder="রিপ্লাই লিখুন..."
+                                    className="flex-1 px-2.5 py-1 rounded-lg bg-[#040a1a] border border-sky-500/30 text-white text-[10px] focus:outline-none focus:border-sky-400"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (!draftVal.trim()) return;
+                                      (window as any).onCommandAction?.(msg.id, 'fb_prepare_reply', {
+                                        commentId: c.id,
+                                        text: draftVal.trim(),
+                                      });
+                                      setFbReplyDrafts((prev) => ({ ...prev, [draftKey]: '' }));
+                                    }}
+                                    className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-extrabold transition-colors shrink-0"
+                                  >
+                                    Reply
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {msg.fbReply && (
+                    <div className="mt-3 p-3.5 rounded-2xl bg-black/40 border border-blue-500/30 space-y-2.5">
+                      <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-lg bg-blue-500/20 flex items-center justify-center text-blue-400 shrink-0">
+                            <Facebook className="w-4 h-4" />
+                          </div>
+                          <span className="text-[11px] font-black text-white uppercase tracking-wider">
+                            Facebook Comment Reply
+                          </span>
+                        </div>
+                        <span className="text-[10px] font-mono text-blue-300 truncate max-w-[140px]">
+                          {msg.fbReply.commentId}
+                        </span>
+                      </div>
+
+                      <div className="space-y-1.5 text-[11px]">
+                        <div>
+                          <span className="text-slate-400 font-bold">Comment ID: </span>
+                          <span className="text-white font-mono">{msg.fbReply.commentId}</span>
+                        </div>
+                        <div className="p-2.5 rounded-xl bg-black/40 border border-white/5 text-slate-200 whitespace-pre-wrap">
+                          {msg.fbReply.text}
+                        </div>
+                      </div>
+
+                      {msg.fbReply.status === 'pending' ? (
+                        <div className="space-y-2 pt-1">
+                          <p className="text-[10px] text-amber-300/90 font-semibold">
+                            Approval required (Post or reply on Facebook / YouTube):
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => (window as any).onCommandAction?.(msg.id, 'fb_reply_approve')}
+                              className="flex-1 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-[10px] font-extrabold transition-colors flex items-center justify-center gap-1 shadow-sm"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              Approve & Reply
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => (window as any).onCommandAction?.(msg.id, 'fb_reply_cancel')}
+                              className="flex-1 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold transition-colors flex items-center justify-center gap-1"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              Reject
+                            </button>
+                          </div>
+                        </div>
+                      ) : msg.fbReply.status === 'posting' ? (
+                        <div className="text-[10px] font-bold text-amber-300 pt-1">
+                          Facebook-এ রিপ্লাই পোস্ট করা হচ্ছে...
+                        </div>
+                      ) : msg.fbReply.status === 'posted' ? (
+                        <div className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-400 pt-1">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>রিপ্লাই সফলভাবে পোস্ট করা হয়েছে</span>
+                        </div>
+                      ) : msg.fbReply.status === 'error' ? (
+                        <div className="space-y-2 pt-1">
+                          <div className="text-[10px] font-bold text-rose-400">
+                            ত্রুটি: {msg.fbReply.error || 'রিপ্লাই পোস্ট করা যায়নি'}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => (window as any).onCommandAction?.(msg.id, 'fb_reply_approve')}
+                            className="w-full py-1.5 rounded-lg bg-blue-500/20 hover:bg-blue-500/30 border border-blue-400/40 text-blue-300 text-[10px] font-extrabold transition-all"
+                          >
+                            Retry Reply
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 text-[10px] font-bold text-rose-400 pt-1">
+                          <XCircle className="w-3.5 h-3.5" />
+                          <span>বাতিল করা হয়েছে</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {msg.pcAction && (
+                    <div className="mt-3 p-3.5 rounded-2xl bg-black/40 border border-sky-500/30 space-y-2.5">
+                      <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                        <span className="text-[11px] font-black text-white uppercase tracking-wider">
+                          PC Action ({msg.pcAction.actionType.replace(/_/g, ' ')})
+                        </span>
+                      </div>
+
+                      <div className="p-2.5 rounded-xl bg-black/40 border border-white/5 text-[11px] text-slate-200 font-mono whitespace-pre-wrap break-all">
+                        {msg.pcAction.target}
+                        {msg.pcAction.text !== undefined && (
+                          <div className="mt-1.5 pt-1.5 border-t border-white/10 text-slate-100 font-sans">
+                            {msg.pcAction.text}
+                          </div>
+                        )}
+                      </div>
+
+                      {msg.pcAction.status === 'pending' ? (
+                        <div className="space-y-2 pt-1">
+                          <p className="text-[10px] text-amber-300/90 font-semibold">
+                            Approval required (PC Control Rule):
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => (window as any).onCommandAction?.(msg.id, 'pc_action_approve')}
+                              className="flex-1 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-[10px] font-extrabold transition-colors flex items-center justify-center gap-1 shadow-sm"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => (window as any).onCommandAction?.(msg.id, 'pc_action_cancel')}
+                              className="flex-1 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold transition-colors flex items-center justify-center gap-1"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              Reject
+                            </button>
+                          </div>
+                        </div>
+                      ) : msg.pcAction.status === 'done' ? (
+                        <div className="space-y-1.5 pt-1">
+                          <div className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-400">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>সম্পন্ন হয়েছে</span>
+                          </div>
+                          {msg.pcAction.resultText && (
+                            <div className="p-2 rounded-lg bg-black/50 border border-white/5 text-[10px] text-slate-300 font-mono whitespace-pre-wrap max-h-40 overflow-y-auto">
+                              {msg.pcAction.resultText}
+                            </div>
+                          )}
+                        </div>
+                      ) : msg.pcAction.status === 'error' ? (
+                        <div className="text-[10px] font-bold text-rose-400 pt-1">
+                          ত্রুটি: {msg.pcAction.error || 'PC Action ব্যর্থ হয়েছে'}
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 text-[10px] font-bold text-rose-400 pt-1">
+                          <XCircle className="w-3.5 h-3.5" />
+                          <span>বাতিল করা হয়েছে</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {msg.actionCommand && (
                     <div className="mt-3 p-3 rounded-xl bg-black/30 border border-white/10 space-y-2.5">
                       <div className="flex items-center gap-2.5">
@@ -424,15 +1177,60 @@ export const ChatBox: React.FC<ChatBoxProps> = ({
                           <p className="text-[10px] text-slate-400 truncate">"{msg.actionCommand.query}"</p>
                         </div>
                       </div>
-                      <a 
-                        href={msg.actionCommand.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="w-full py-2 rounded-lg bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 text-sky-300 text-[10px] font-extrabold transition-all flex items-center justify-center gap-1.5 shadow-sm"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5" />
-                        Open Link
-                      </a>
+
+                      {msg.actionCommand.status === 'pending' ? (
+                        <div className="space-y-2 pt-1">
+                          <p className="text-[10px] text-amber-300/90 font-semibold">
+                            অনুমতি প্রয়োজন: নতুন ট্যাবে এই লিঙ্কটি খুলতে চান?
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <a
+                              href={msg.actionCommand.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={() => (window as any).onCommandAction?.(msg.id, 'action_command_approve')}
+                              className="flex-1 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-[10px] font-extrabold transition-colors flex items-center justify-center gap-1 shadow-sm"
+                            >
+                              <CheckCircle2 className="w-3 h-3" />
+                              Confirm & Open
+                            </a>
+                            <button
+                              type="button"
+                              onClick={() => (window as any).onCommandAction?.(msg.id, 'action_command_cancel')}
+                              className="flex-1 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold transition-colors flex items-center justify-center gap-1"
+                            >
+                              <XCircle className="w-3 h-3" />
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : msg.actionCommand.status === 'cancelled' ? (
+                        <div className="flex items-center justify-between pt-1">
+                          <div className="flex items-center gap-1.5 text-[10px] font-bold text-rose-400">
+                            <XCircle className="w-3.5 h-3.5" />
+                            <span>বাতিল করা হয়েছে</span>
+                          </div>
+                          <a
+                            href={msg.actionCommand.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-2.5 py-1 rounded-lg bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 text-sky-300 text-[10px] font-extrabold transition-all flex items-center gap-1"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            Open Link
+                          </a>
+                        </div>
+                      ) : (
+                        <a
+                          href={msg.actionCommand.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="w-full py-2 rounded-lg bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 text-sky-300 text-[10px] font-extrabold transition-all flex items-center justify-center gap-1.5 shadow-sm"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          Open Link
+                        </a>
+                      )}
                     </div>
                   )}
 

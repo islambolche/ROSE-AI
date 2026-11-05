@@ -49,3 +49,19 @@ export function getAgentData(agentId: AgentId): AgentDataSource {
     return { connected: false, items: [] };
   }
 }
+export function saveAgentDataItem(agentId: AgentId, item: any): void {
+  const storageKey = DATA_SOURCE_KEYS[agentId];
+  if (!storageKey || typeof window === 'undefined') return;
+
+  try {
+    const data = getAgentData(agentId);
+    data.items.push({
+      ...item,
+      id: Math.random().toString(36).substring(2, 11),
+      timestamp: new Date().toISOString()
+    });
+    localStorage.setItem(storageKey, JSON.stringify(data));
+  } catch (e) {
+    console.error('Failed to save data item:', e);
+  }
+}

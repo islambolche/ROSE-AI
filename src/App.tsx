@@ -29,9 +29,37 @@ import {
   removeDirectoryHandle,
   logFileAction,
   writeFileToFolder,
-  downloadAsFile
+  downloadAsFile,
+  addPendingApproval,
+  removePendingApproval,
+  registerPendingApprovalResolver,
 } from './lib/approvals';
-import { extractCommandSignal, getCommandUrl } from './lib/commands';
+import {
+  extractCommandSignal,
+  getCommandUrl,
+  extractBillSignal,
+  detectUserCommand,
+  getBengaliConfirmationText,
+  extractEmailSignal,
+  sendGmailMessage,
+  extractYouTubeUploadSignal,
+  extractYouTubeCommentsSignal,
+  extractYouTubeReplySignal,
+  uploadYouTubeVideoResumable,
+  fetchYouTubeComments,
+  postYouTubeCommentReply,
+  getYouTubeUploadFile,
+  extractFacebookPostSignal,
+  extractFacebookCommentsSignal,
+  extractFacebookReplySignal,
+  publishFacebookPagePost,
+  fetchFacebookPostComments,
+  postFacebookCommentReply,
+  getFacebookMediaFile,
+  extractPcActionSignal,
+  executePcAction,
+} from './lib/commands';
+import { saveAgentDataItem } from './lib/dataSources';
 
 const WELCOME_ADDRESS_OPTIONS: UserAddressAsType[] = [
   'শুধু নাম',
@@ -184,6 +212,7 @@ export default function App() {
   };
 
   const handleSaveFileApproval = async (msgId: string, allowed: boolean) => {
+    removePendingApproval(msgId);
     const msg = messages.find((m) => m.id === msgId);
     if (!msg || !msg.saveFileMeta) return;
 
@@ -373,18 +402,6 @@ export default function App() {
       return;
     }
 
-    // Ask before every action (ON by default)
-    if (settings.integrations.askBeforeAction) {
-      const confirmed = window.confirm('আপনি কি নিশ্চিত যে আপনি এটি করতে চান? (Confirm Action)');
-      if (!confirmed) {
-        showToast('কাজটি বাতিল করা হয়েছে');
-        if (options?.fromVoice && voiceChat.isMicActive()) {
-          voiceChat.resumeRecognitionAfterSpeaking();
-        }
-        return;
-      }
-    }
-
     // 1. Immediately store and display user message
     const userRecord = dbService.addMessage({
       agent_id: selectedAgentId,
@@ -399,6 +416,77 @@ export default function App() {
     };
     const currentHistory = [...messages, userChatMessage];
     setMessages(currentHistory);
+
+    // Direct voice/text commands for Rose (YouTube play/search & Facebook search — no paid API)
+    if (selectedAgentId === 'rose') {
+      const directCommand = detectUserCommand(text);
+      if (directCommand) {
+        const url = getCommandUrl(directCommand);
+        const replyText = getBengaliConfirmationText(directCommand);
+        const ruleKey =
+          directCommand.type === 'youtube_play' ? 'playMusicVideo' : 'openWebsiteOrAppPc';
+        const needsApproval = Boolean(settings.permissionRules?.[ruleKey] ?? true);
+
+        const agentRecord = dbService.addMessage({
+          agent_id: 'rose',
+          role: 'agent',
+          content: replyText,
+          device: 'pc',
+        });
+
+        const agentChatMessage: ChatMessage = {
+          ...formatRecordToChatMessage(agentRecord),
+          emotion: 'warm',
+          fromVoice: options?.fromVoice,
+          actionCommand: {
+            ...directCommand,
+            url,
+            status: needsApproval ? 'pending' : 'ready',
+          },
+        };
+
+        setMessages((prev) => [...prev, agentChatMessage]);
+
+        if (needsApproval) {
+          addPendingApproval({
+            id: agentRecord.id,
+            ruleKey,
+            title:
+              directCommand.type === 'youtube_play'
+                ? 'Play music / video'
+                : 'Open website or app on PC',
+            detail: `${directCommand.type.replace('_', ' ')}: "${directCommand.query}"`,
+            timestamp: new Date().toISOString(),
+            payload: {
+              kind: 'action_command',
+              msgId: agentRecord.id,
+              url,
+            },
+          });
+        } else {
+          const win = window.open(url, '_blank', 'noopener,noreferrer');
+          if (!win) {
+            showToast('ব্রাউজার নতুন ট্যাব ব্লক করেছে — মেসেজের বাটনে ক্লিক করে খুলুন।');
+          }
+        }
+
+        const micActive = voiceChat.isMicActive() || isMicOn;
+        const voiceReplyEnabled = settings.voiceSettings?.voiceReply !== false;
+        if (micActive && voiceReplyEnabled && replyText.trim()) {
+          const agentLang = settings.agents.rose?.language || 'বাংলা';
+          voiceChat.speak(replyText, 'rose', {
+            language: agentLang,
+            speed: settings.voiceSettings?.speed ?? 1.0,
+            volume: settings.voiceSettings?.volume ?? 1.0,
+            onStart: () => setIsSpeaking(true),
+            onEnd: () => setIsSpeaking(false),
+          });
+        } else if (voiceChat.isMicActive()) {
+          voiceChat.resumeRecognitionAfterSpeaking();
+        }
+        return;
+      }
+    }
 
     // 1) "ইন্টারনেট নেই বা সময়সীমা শেষ" সাধারণ বার্তা শুধু navigator.onLine == false হলে দেখাও।
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
@@ -437,19 +525,438 @@ export default function App() {
               {
                 onRoseIntro: (introText, emotion) => {
                   const { cleanText: textAfterSave, saveRequest } = extractSaveFileSignal(introText);
-                  const { cleanText: textAfterCommand, command } = extractCommandSignal(textAfterSave);
+                  const { cleanText: textAfterBill, bill } = extractBillSignal(textAfterSave);
+                  const { cleanText: textAfterCommand, command } = extractCommandSignal(textAfterBill);
+                  const { cleanText: textAfterEmail, emailDraft: rawEmailDraft } =
+                    extractEmailSignal(textAfterCommand);
+                  const { cleanText: textAfterYtUpload, ytUpload: rawYtUpload } =
+                    extractYouTubeUploadSignal(textAfterEmail);
+                  const { cleanText: textAfterYtComments, ytComments: rawYtComments } =
+                    extractYouTubeCommentsSignal(textAfterYtUpload);
+                  const { cleanText: textAfterYtReply, ytReply: rawYtReply } =
+                    extractYouTubeReplySignal(textAfterYtComments);
+                  const { cleanText: textAfterFbPost, fbPost: rawFbPost } =
+                    extractFacebookPostSignal(textAfterYtReply);
+                  const { cleanText: textAfterFbComments, fbComments: rawFbComments } =
+                    extractFacebookCommentsSignal(textAfterFbPost);
+                  const { cleanText: textAfterFbReply, fbReply: rawFbReply } =
+                    extractFacebookReplySignal(textAfterFbComments);
+                  const { cleanText: textAfterPcAction, pcAction: rawPcAction } =
+                    extractPcActionSignal(textAfterFbReply);
                   
-                  const actionCommand = command ? { ...command, url: getCommandUrl(command) } : undefined;
+                  const cmdRuleKey =
+                    command?.type === 'youtube_play' ? 'playMusicVideo' : 'openWebsiteOrAppPc';
+                  const needsApproval = Boolean(settings.permissionRules?.[cmdRuleKey] ?? true);
+                  const actionCommand = command
+                    ? {
+                        ...command,
+                        url: getCommandUrl(command),
+                        status: needsApproval ? ('pending' as const) : ('ready' as const),
+                      }
+                    : undefined;
+
+                  const askEmail = Boolean(settings.permissionRules?.sendEmailApplyJob ?? true);
+                  const emailDraft = rawEmailDraft
+                    ? {
+                        ...rawEmailDraft,
+                        status: askEmail ? ('pending' as const) : ('sending' as const),
+                      }
+                    : undefined;
+
+                  const askYtPostReply = Boolean(settings.permissionRules?.postReplyFbYoutube ?? true);
+                  const ytUpload = rawYtUpload
+                    ? {
+                        ...rawYtUpload,
+                        status: 'pending' as const,
+                      }
+                    : undefined;
+                  const ytComments = rawYtComments
+                    ? {
+                        videoId: rawYtComments.videoId,
+                        status: 'loading' as const,
+                        comments: [],
+                      }
+                    : undefined;
+                  const ytReply = rawYtReply
+                    ? {
+                        ...rawYtReply,
+                        status: askYtPostReply ? ('pending' as const) : ('posting' as const),
+                      }
+                    : undefined;
+                  const fbPost = rawFbPost
+                    ? {
+                        ...rawFbPost,
+                        status:
+                          askYtPostReply || rawFbPost.mediaType !== 'text'
+                            ? ('pending' as const)
+                            : ('posting' as const),
+                      }
+                    : undefined;
+                  const fbComments = rawFbComments
+                    ? {
+                        postId: rawFbComments.postId,
+                        status: 'loading' as const,
+                        comments: [],
+                      }
+                    : undefined;
+                  const fbReply = rawFbReply
+                    ? {
+                        ...rawFbReply,
+                        status: askYtPostReply ? ('pending' as const) : ('posting' as const),
+                      }
+                    : undefined;
+
+                  const pcRuleKey =
+                    rawPcAction?.actionType === 'send_whatsapp' ||
+                    rawPcAction?.actionType === 'send_messenger'
+                      ? ('sendWhatsappMessenger' as const)
+                      : rawPcAction?.actionType === 'play_media'
+                      ? ('playMusicVideo' as const)
+                      : rawPcAction?.actionType === 'type_text'
+                      ? ('typeTextOrKeysPc' as const)
+                      : rawPcAction?.actionType === 'read_file'
+                      ? ('readOrOpenFilesPc' as const)
+                      : ('openWebsiteOrAppPc' as const);
+                  const askPcRule = Boolean(settings.permissionRules?.[pcRuleKey] ?? true);
+                  const pcAction = rawPcAction
+                    ? {
+                        ...rawPcAction,
+                        status: askPcRule ? ('pending' as const) : ('done' as const),
+                      }
+                    : undefined;
+
+                  if (actionCommand && !needsApproval) {
+                    const win = window.open(actionCommand.url, '_blank', 'noopener,noreferrer');
+                    if (!win) {
+                      showToast('ব্রাউজার নতুন ট্যাব ব্লক করেছে — মেসেজের বাটনে ক্লিক করে খুলুন।');
+                    }
+                  }
 
                   const introRecord = dbService.addMessage({
                     agent_id: 'rose',
                     role: 'agent',
-                    content: textAfterCommand,
+                    content: textAfterPcAction,
                     device: 'pc',
                     team_meta: saveRequest ? {
                       kind: 'save_file'
                     } : undefined
                   });
+
+                  if (actionCommand && needsApproval) {
+                    addPendingApproval({
+                      id: introRecord.id,
+                      ruleKey: cmdRuleKey,
+                      title:
+                        command?.type === 'youtube_play'
+                          ? 'Play music / video'
+                          : 'Open website or app on PC',
+                      detail: `${actionCommand.type.replace('_', ' ')}: "${actionCommand.query}"`,
+                      timestamp: new Date().toISOString(),
+                      payload: {
+                        kind: 'action_command',
+                        msgId: introRecord.id,
+                        url: actionCommand.url,
+                      },
+                    });
+                  }
+
+                  if (saveRequest && (settings.permissionRules?.readOrOpenFilesPc ?? true)) {
+                    addPendingApproval({
+                      id: introRecord.id,
+                      ruleKey: 'readOrOpenFilesPc',
+                      title: 'Read or open files on PC',
+                      detail: `Save file: ${saveRequest.name}`,
+                      timestamp: new Date().toISOString(),
+                      payload: {
+                        kind: 'save_file',
+                        msgId: introRecord.id,
+                        fileName: saveRequest.name,
+                        fileContent: saveRequest.content,
+                      },
+                    });
+                  }
+
+                  if (bill && (settings.permissionRules?.saveOrSendBill ?? true)) {
+                    addPendingApproval({
+                      id: introRecord.id,
+                      ruleKey: 'saveOrSendBill',
+                      title: 'Save or send a bill',
+                      detail: `Bill for ${bill.customerName} (${bill.total} ৳)`,
+                      timestamp: new Date().toISOString(),
+                      payload: {
+                        kind: 'whatsapp_bill',
+                        msgId: introRecord.id,
+                        url: bill.waUrl,
+                        bill,
+                      },
+                    });
+                  }
+
+                  if (emailDraft) {
+                    if (askEmail) {
+                      addPendingApproval({
+                        id: introRecord.id,
+                        ruleKey: 'sendEmailApplyJob',
+                        title: 'Send email / apply for a job',
+                        detail: `To: ${emailDraft.to} • Subject: "${emailDraft.subject}"`,
+                        timestamp: new Date().toISOString(),
+                        payload: {
+                          kind: 'gmail_send',
+                          msgId: introRecord.id,
+                          emailDraft,
+                        },
+                      });
+                    } else {
+                      sendGmailMessage(
+                        settings.integrations.gmail?.accessToken || '',
+                        emailDraft.to,
+                        emailDraft.subject,
+                        emailDraft.body
+                      ).then((res) => {
+                        setMessages((prev) =>
+                          prev.map((m) =>
+                            m.id === introRecord.id && m.emailDraft
+                              ? {
+                                  ...m,
+                                  emailDraft: {
+                                    ...m.emailDraft,
+                                    status: res.ok ? 'sent' : 'error',
+                                    error: res.error,
+                                  },
+                                }
+                              : m
+                          )
+                        );
+                      });
+                    }
+                  }
+
+                  if (ytUpload) {
+                    addPendingApproval({
+                      id: introRecord.id,
+                      ruleKey: 'postReplyFbYoutube',
+                      title: 'Post or reply on Facebook / YouTube',
+                      detail: `YouTube Upload: "${ytUpload.title}"`,
+                      timestamp: new Date().toISOString(),
+                      payload: {
+                        kind: 'yt_upload',
+                        msgId: introRecord.id,
+                        ytUpload,
+                      },
+                    });
+                  }
+
+                  if (ytComments) {
+                    fetchYouTubeComments(
+                      settings.integrations.youtube?.accessToken || '',
+                      ytComments.videoId
+                    ).then((res) => {
+                      setMessages((prev) =>
+                        prev.map((m) =>
+                          m.id === introRecord.id && m.ytComments
+                            ? {
+                                ...m,
+                                ytComments: {
+                                  ...m.ytComments,
+                                  status: res.ok ? 'loaded' : 'error',
+                                  comments: res.comments || [],
+                                  error: res.error,
+                                },
+                              }
+                            : m
+                        )
+                      );
+                    });
+                  }
+
+                  if (ytReply) {
+                    if (askYtPostReply) {
+                      addPendingApproval({
+                        id: introRecord.id,
+                        ruleKey: 'postReplyFbYoutube',
+                        title: 'Post or reply on Facebook / YouTube',
+                        detail: `YouTube Reply (${ytReply.parentId}): "${ytReply.text}"`,
+                        timestamp: new Date().toISOString(),
+                        payload: {
+                          kind: 'yt_reply',
+                          msgId: introRecord.id,
+                          ytReply,
+                        },
+                      });
+                    } else {
+                      postYouTubeCommentReply(
+                        settings.integrations.youtube?.accessToken || '',
+                        ytReply.parentId,
+                        ytReply.text
+                      ).then((res) => {
+                        setMessages((prev) =>
+                          prev.map((m) =>
+                            m.id === introRecord.id && m.ytReply
+                              ? {
+                                  ...m,
+                                  ytReply: {
+                                    ...m.ytReply,
+                                    status: res.ok ? 'posted' : 'error',
+                                    error: res.error,
+                                  },
+                                }
+                              : m
+                          )
+                        );
+                      });
+                    }
+                  }
+
+                  if (fbPost) {
+                    if (askYtPostReply || fbPost.mediaType !== 'text') {
+                      addPendingApproval({
+                        id: introRecord.id,
+                        ruleKey: 'postReplyFbYoutube',
+                        title: 'Post or reply on Facebook / YouTube',
+                        detail: `Facebook Page Post (${fbPost.mediaType}): "${fbPost.message.slice(0, 60)}"`,
+                        timestamp: new Date().toISOString(),
+                        payload: {
+                          kind: 'fb_post',
+                          msgId: introRecord.id,
+                          fbPost,
+                        },
+                      });
+                    } else {
+                      publishFacebookPagePost(
+                        settings.integrations.facebookPage?.pageId || '',
+                        settings.integrations.facebookPage?.accessToken || '',
+                        fbPost.mediaType,
+                        fbPost.message
+                      ).then((res) => {
+                        setMessages((prev) =>
+                          prev.map((m) =>
+                            m.id === introRecord.id && m.fbPost
+                              ? {
+                                  ...m,
+                                  fbPost: {
+                                    ...m.fbPost,
+                                    status: res.ok ? 'posted' : 'error',
+                                    postId: res.postId,
+                                    error: res.error,
+                                  },
+                                }
+                              : m
+                          )
+                        );
+                      });
+                    }
+                  }
+
+                  if (fbComments) {
+                    fetchFacebookPostComments(
+                      settings.integrations.facebookPage?.accessToken || '',
+                      fbComments.postId
+                    ).then((res) => {
+                      setMessages((prev) =>
+                        prev.map((m) =>
+                          m.id === introRecord.id && m.fbComments
+                            ? {
+                                ...m,
+                                fbComments: {
+                                  ...m.fbComments,
+                                  status: res.ok ? 'loaded' : 'error',
+                                  comments: res.comments || [],
+                                  error: res.error,
+                                },
+                              }
+                            : m
+                        )
+                      );
+                    });
+                  }
+
+                  if (fbReply) {
+                    if (askYtPostReply) {
+                      addPendingApproval({
+                        id: introRecord.id,
+                        ruleKey: 'postReplyFbYoutube',
+                        title: 'Post or reply on Facebook / YouTube',
+                        detail: `Facebook Reply (${fbReply.commentId}): "${fbReply.text}"`,
+                        timestamp: new Date().toISOString(),
+                        payload: {
+                          kind: 'fb_reply',
+                          msgId: introRecord.id,
+                          fbReply,
+                        },
+                      });
+                    } else {
+                      postFacebookCommentReply(
+                        settings.integrations.facebookPage?.accessToken || '',
+                        fbReply.commentId,
+                        fbReply.text
+                      ).then((res) => {
+                        setMessages((prev) =>
+                          prev.map((m) =>
+                            m.id === introRecord.id && m.fbReply
+                              ? {
+                                  ...m,
+                                  fbReply: {
+                                    ...m.fbReply,
+                                    status: res.ok ? 'posted' : 'error',
+                                    error: res.error,
+                                  },
+                                }
+                              : m
+                          )
+                        );
+                      });
+                    }
+                  }
+
+                  if (pcAction) {
+                    const ruleTitle =
+                      pcAction.actionType === 'send_whatsapp' ||
+                      pcAction.actionType === 'send_messenger'
+                        ? 'Send WhatsApp / Messenger message'
+                        : pcAction.actionType === 'play_media'
+                        ? 'Play music / video'
+                        : pcAction.actionType === 'type_text'
+                        ? 'Type text or press keys on PC'
+                        : pcAction.actionType === 'read_file'
+                        ? 'Read or open files on PC'
+                        : 'Open website or app on PC';
+                    const detailStr =
+                      pcAction.text !== undefined
+                        ? `${pcAction.actionType} (${pcAction.target}): "${pcAction.text}"`
+                        : `${pcAction.actionType}: "${pcAction.target}"`;
+                    if (askPcRule) {
+                      addPendingApproval({
+                        id: introRecord.id,
+                        ruleKey: pcRuleKey,
+                        title: ruleTitle,
+                        detail: detailStr,
+                        timestamp: new Date().toISOString(),
+                        payload: {
+                          kind: 'pc_action',
+                          msgId: introRecord.id,
+                          pcAction,
+                        },
+                      });
+                    } else {
+                      executePcAction(pcAction.actionType, pcAction.target, pcAction.text).then((res) => {
+                        setMessages((prev) =>
+                          prev.map((m) =>
+                            m.id === introRecord.id && m.pcAction
+                              ? {
+                                  ...m,
+                                  pcAction: {
+                                    ...m.pcAction,
+                                    status: res.ok ? 'done' : 'error',
+                                    resultText: res.resultText,
+                                    error: res.error,
+                                  },
+                                }
+                              : m
+                          )
+                        );
+                      });
+                    }
+                  }
                   
                   const introMsg: ChatMessage = {
                     ...formatRecordToChatMessage(introRecord),
@@ -461,10 +968,18 @@ export default function App() {
                       status: 'pending',
                       timestamp: new Date().toISOString()
                     } : undefined,
+                    bill: bill || undefined,
+                    emailDraft,
+                    ytUpload,
+                    ytComments,
+                    ytReply,
+                    fbPost,
+                    fbComments,
+                    fbReply,
+                    pcAction,
                     actionCommand
                   };
                   setMessages((prev) => [...prev, introMsg]);
-                  if (actionCommand) handleCommandAction(actionCommand);
                 },
                 onWorkingAgentsChange: (agentIds, mode) => {
                   setWorkingAgents(agentIds);
@@ -569,19 +1084,438 @@ export default function App() {
       // 4. Save final answer / summary to persistent db ONLY if Rose is the answering party (ASK or direct)
       if (!result.skipRoseFinalMessage) {
         const { cleanText: textAfterSave, saveRequest } = extractSaveFileSignal(result.text);
-        const { cleanText: textAfterCommand, command } = extractCommandSignal(textAfterSave);
+        const { cleanText: textAfterBill, bill } = extractBillSignal(textAfterSave);
+        const { cleanText: textAfterCommand, command } = extractCommandSignal(textAfterBill);
+        const { cleanText: textAfterEmail, emailDraft: rawEmailDraft } =
+          extractEmailSignal(textAfterCommand);
+        const { cleanText: textAfterYtUpload, ytUpload: rawYtUpload } =
+          extractYouTubeUploadSignal(textAfterEmail);
+        const { cleanText: textAfterYtComments, ytComments: rawYtComments } =
+          extractYouTubeCommentsSignal(textAfterYtUpload);
+        const { cleanText: textAfterYtReply, ytReply: rawYtReply } =
+          extractYouTubeReplySignal(textAfterYtComments);
+        const { cleanText: textAfterFbPost, fbPost: rawFbPost } =
+          extractFacebookPostSignal(textAfterYtReply);
+        const { cleanText: textAfterFbComments, fbComments: rawFbComments } =
+          extractFacebookCommentsSignal(textAfterFbPost);
+        const { cleanText: textAfterFbReply, fbReply: rawFbReply } =
+          extractFacebookReplySignal(textAfterFbComments);
+        const { cleanText: textAfterPcAction, pcAction: rawPcAction } =
+          extractPcActionSignal(textAfterFbReply);
 
-        const actionCommand = command ? { ...command, url: getCommandUrl(command) } : undefined;
+        const cmdRuleKey =
+          command?.type === 'youtube_play' ? 'playMusicVideo' : 'openWebsiteOrAppPc';
+        const needsApproval = Boolean(settings.permissionRules?.[cmdRuleKey] ?? true);
+        const actionCommand = command
+          ? {
+              ...command,
+              url: getCommandUrl(command),
+              status: needsApproval ? ('pending' as const) : ('ready' as const),
+            }
+          : undefined;
+
+        const askEmail = Boolean(settings.permissionRules?.sendEmailApplyJob ?? true);
+        const emailDraft = rawEmailDraft
+          ? {
+              ...rawEmailDraft,
+              status: askEmail ? ('pending' as const) : ('sending' as const),
+            }
+          : undefined;
+
+        const askYtPostReply = Boolean(settings.permissionRules?.postReplyFbYoutube ?? true);
+        const ytUpload = rawYtUpload
+          ? {
+              ...rawYtUpload,
+              status: 'pending' as const,
+            }
+          : undefined;
+        const ytComments = rawYtComments
+          ? {
+              videoId: rawYtComments.videoId,
+              status: 'loading' as const,
+              comments: [],
+            }
+          : undefined;
+        const ytReply = rawYtReply
+          ? {
+              ...rawYtReply,
+              status: askYtPostReply ? ('pending' as const) : ('posting' as const),
+            }
+          : undefined;
+        const fbPost = rawFbPost
+          ? {
+              ...rawFbPost,
+              status:
+                askYtPostReply || rawFbPost.mediaType !== 'text'
+                  ? ('pending' as const)
+                  : ('posting' as const),
+            }
+          : undefined;
+        const fbComments = rawFbComments
+          ? {
+              postId: rawFbComments.postId,
+              status: 'loading' as const,
+              comments: [],
+            }
+          : undefined;
+        const fbReply = rawFbReply
+          ? {
+              ...rawFbReply,
+              status: askYtPostReply ? ('pending' as const) : ('posting' as const),
+            }
+          : undefined;
+
+        const pcRuleKey =
+          rawPcAction?.actionType === 'send_whatsapp' ||
+          rawPcAction?.actionType === 'send_messenger'
+            ? ('sendWhatsappMessenger' as const)
+            : rawPcAction?.actionType === 'play_media'
+            ? ('playMusicVideo' as const)
+            : rawPcAction?.actionType === 'type_text'
+            ? ('typeTextOrKeysPc' as const)
+            : rawPcAction?.actionType === 'read_file'
+            ? ('readOrOpenFilesPc' as const)
+            : ('openWebsiteOrAppPc' as const);
+        const askPcRule = Boolean(settings.permissionRules?.[pcRuleKey] ?? true);
+        const pcAction = rawPcAction
+          ? {
+              ...rawPcAction,
+              status: askPcRule ? ('pending' as const) : ('done' as const),
+            }
+          : undefined;
+
+        if (actionCommand && !needsApproval) {
+          const win = window.open(actionCommand.url, '_blank', 'noopener,noreferrer');
+          if (!win) {
+            showToast('ব্রাউজার নতুন ট্যাব ব্লক করেছে — মেসেজের বাটনে ক্লিক করে খুলুন।');
+          }
+        }
 
         const agentRecord = dbService.addMessage({
           agent_id: selectedAgentId,
           role: 'agent',
-          content: textAfterCommand,
+          content: textAfterPcAction,
           device: 'pc',
           is_system: result.isError,
           error_subtext: result.errorMeta?.subtext,
           team_meta: saveRequest ? { kind: 'save_file' } : undefined
         });
+
+        if (actionCommand && needsApproval) {
+          addPendingApproval({
+            id: agentRecord.id,
+            ruleKey: cmdRuleKey,
+            title:
+              command?.type === 'youtube_play'
+                ? 'Play music / video'
+                : 'Open website or app on PC',
+            detail: `${actionCommand.type.replace('_', ' ')}: "${actionCommand.query}"`,
+            timestamp: new Date().toISOString(),
+            payload: {
+              kind: 'action_command',
+              msgId: agentRecord.id,
+              url: actionCommand.url,
+            },
+          });
+        }
+
+        if (saveRequest && (settings.permissionRules?.readOrOpenFilesPc ?? true)) {
+          addPendingApproval({
+            id: agentRecord.id,
+            ruleKey: 'readOrOpenFilesPc',
+            title: 'Read or open files on PC',
+            detail: `Save file: ${saveRequest.name}`,
+            timestamp: new Date().toISOString(),
+            payload: {
+              kind: 'save_file',
+              msgId: agentRecord.id,
+              fileName: saveRequest.name,
+              fileContent: saveRequest.content,
+            },
+          });
+        }
+
+        if (bill && (settings.permissionRules?.saveOrSendBill ?? true)) {
+          addPendingApproval({
+            id: agentRecord.id,
+            ruleKey: 'saveOrSendBill',
+            title: 'Save or send a bill',
+            detail: `Bill for ${bill.customerName} (${bill.total} ৳)`,
+            timestamp: new Date().toISOString(),
+            payload: {
+              kind: 'whatsapp_bill',
+              msgId: agentRecord.id,
+              url: bill.waUrl,
+              bill,
+            },
+          });
+        }
+
+        if (emailDraft) {
+          if (askEmail) {
+            addPendingApproval({
+              id: agentRecord.id,
+              ruleKey: 'sendEmailApplyJob',
+              title: 'Send email / apply for a job',
+              detail: `To: ${emailDraft.to} • Subject: "${emailDraft.subject}"`,
+              timestamp: new Date().toISOString(),
+              payload: {
+                kind: 'gmail_send',
+                msgId: agentRecord.id,
+                emailDraft,
+              },
+            });
+          } else {
+            sendGmailMessage(
+              settings.integrations.gmail?.accessToken || '',
+              emailDraft.to,
+              emailDraft.subject,
+              emailDraft.body
+            ).then((res) => {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === agentRecord.id && m.emailDraft
+                    ? {
+                        ...m,
+                        emailDraft: {
+                          ...m.emailDraft,
+                          status: res.ok ? 'sent' : 'error',
+                          error: res.error,
+                        },
+                      }
+                    : m
+                )
+              );
+            });
+          }
+        }
+
+        if (ytUpload) {
+          addPendingApproval({
+            id: agentRecord.id,
+            ruleKey: 'postReplyFbYoutube',
+            title: 'Post or reply on Facebook / YouTube',
+            detail: `YouTube Upload: "${ytUpload.title}"`,
+            timestamp: new Date().toISOString(),
+            payload: {
+              kind: 'yt_upload',
+              msgId: agentRecord.id,
+              ytUpload,
+            },
+          });
+        }
+
+        if (ytComments) {
+          fetchYouTubeComments(
+            settings.integrations.youtube?.accessToken || '',
+            ytComments.videoId
+          ).then((res) => {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === agentRecord.id && m.ytComments
+                  ? {
+                      ...m,
+                      ytComments: {
+                        ...m.ytComments,
+                        status: res.ok ? 'loaded' : 'error',
+                        comments: res.comments || [],
+                        error: res.error,
+                      },
+                    }
+                  : m
+              )
+            );
+          });
+        }
+
+        if (ytReply) {
+          if (askYtPostReply) {
+            addPendingApproval({
+              id: agentRecord.id,
+              ruleKey: 'postReplyFbYoutube',
+              title: 'Post or reply on Facebook / YouTube',
+              detail: `YouTube Reply (${ytReply.parentId}): "${ytReply.text}"`,
+              timestamp: new Date().toISOString(),
+              payload: {
+                kind: 'yt_reply',
+                msgId: agentRecord.id,
+                ytReply,
+              },
+            });
+          } else {
+            postYouTubeCommentReply(
+              settings.integrations.youtube?.accessToken || '',
+              ytReply.parentId,
+              ytReply.text
+            ).then((res) => {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === agentRecord.id && m.ytReply
+                    ? {
+                        ...m,
+                        ytReply: {
+                          ...m.ytReply,
+                          status: res.ok ? 'posted' : 'error',
+                          error: res.error,
+                        },
+                      }
+                    : m
+                )
+              );
+            });
+          }
+        }
+
+        if (fbPost) {
+          if (askYtPostReply || fbPost.mediaType !== 'text') {
+            addPendingApproval({
+              id: agentRecord.id,
+              ruleKey: 'postReplyFbYoutube',
+              title: 'Post or reply on Facebook / YouTube',
+              detail: `Facebook Page Post (${fbPost.mediaType}): "${fbPost.message.slice(0, 60)}"`,
+              timestamp: new Date().toISOString(),
+              payload: {
+                kind: 'fb_post',
+                msgId: agentRecord.id,
+                fbPost,
+              },
+            });
+          } else {
+            publishFacebookPagePost(
+              settings.integrations.facebookPage?.pageId || '',
+              settings.integrations.facebookPage?.accessToken || '',
+              fbPost.mediaType,
+              fbPost.message
+            ).then((res) => {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === agentRecord.id && m.fbPost
+                    ? {
+                        ...m,
+                        fbPost: {
+                          ...m.fbPost,
+                          status: res.ok ? 'posted' : 'error',
+                          postId: res.postId,
+                          error: res.error,
+                        },
+                      }
+                    : m
+                )
+              );
+            });
+          }
+        }
+
+        if (fbComments) {
+          fetchFacebookPostComments(
+            settings.integrations.facebookPage?.accessToken || '',
+            fbComments.postId
+          ).then((res) => {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === agentRecord.id && m.fbComments
+                  ? {
+                      ...m,
+                      fbComments: {
+                        ...m.fbComments,
+                        status: res.ok ? 'loaded' : 'error',
+                        comments: res.comments || [],
+                        error: res.error,
+                      },
+                    }
+                  : m
+              )
+            );
+          });
+        }
+
+        if (fbReply) {
+          if (askYtPostReply) {
+            addPendingApproval({
+              id: agentRecord.id,
+              ruleKey: 'postReplyFbYoutube',
+              title: 'Post or reply on Facebook / YouTube',
+              detail: `Facebook Reply (${fbReply.commentId}): "${fbReply.text}"`,
+              timestamp: new Date().toISOString(),
+              payload: {
+                kind: 'fb_reply',
+                msgId: agentRecord.id,
+                fbReply,
+              },
+            });
+          } else {
+            postFacebookCommentReply(
+              settings.integrations.facebookPage?.accessToken || '',
+              fbReply.commentId,
+              fbReply.text
+            ).then((res) => {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === agentRecord.id && m.fbReply
+                    ? {
+                        ...m,
+                        fbReply: {
+                          ...m.fbReply,
+                          status: res.ok ? 'posted' : 'error',
+                          error: res.error,
+                        },
+                      }
+                    : m
+                )
+              );
+            });
+          }
+        }
+
+        if (pcAction) {
+          const ruleTitle =
+            pcAction.actionType === 'send_whatsapp' ||
+            pcAction.actionType === 'send_messenger'
+              ? 'Send WhatsApp / Messenger message'
+              : pcAction.actionType === 'play_media'
+              ? 'Play music / video'
+              : pcAction.actionType === 'type_text'
+              ? 'Type text or press keys on PC'
+              : pcAction.actionType === 'read_file'
+              ? 'Read or open files on PC'
+              : 'Open website or app on PC';
+          const detailStr =
+            pcAction.text !== undefined
+              ? `${pcAction.actionType} (${pcAction.target}): "${pcAction.text}"`
+              : `${pcAction.actionType}: "${pcAction.target}"`;
+          if (askPcRule) {
+            addPendingApproval({
+              id: agentRecord.id,
+              ruleKey: pcRuleKey,
+              title: ruleTitle,
+              detail: detailStr,
+              timestamp: new Date().toISOString(),
+              payload: {
+                kind: 'pc_action',
+                msgId: agentRecord.id,
+                pcAction,
+              },
+            });
+          } else {
+            executePcAction(pcAction.actionType, pcAction.target, pcAction.text).then((res) => {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === agentRecord.id && m.pcAction
+                    ? {
+                        ...m,
+                        pcAction: {
+                          ...m.pcAction,
+                          status: res.ok ? 'done' : 'error',
+                          resultText: res.resultText,
+                          error: res.error,
+                        },
+                      }
+                    : m
+                )
+              );
+            });
+          }
+        }
 
         const agentChatMessage: ChatMessage = {
           ...formatRecordToChatMessage(agentRecord),
@@ -595,11 +1529,19 @@ export default function App() {
             status: 'pending',
             timestamp: new Date().toISOString()
           } : undefined,
+          bill: bill || undefined,
+          emailDraft,
+          ytUpload,
+          ytComments,
+          ytReply,
+          fbPost,
+          fbComments,
+          fbReply,
+          pcAction,
           actionCommand
         };
 
         setMessages((prev) => [...prev, agentChatMessage]);
-        if (actionCommand) handleCommandAction(actionCommand);
       }
 
       // 5. Hands-free voice loop: speak answer aloud if Mic is ON, Voice reply is ON, and NOT an error
@@ -684,26 +1626,734 @@ export default function App() {
     }
   };
 
-  const handleCommandAction = async (command: { type: string; query: string; url: string }) => {
-    const isYt = command.type.includes('youtube');
-    const platform = isYt ? 'YouTube' : 'Facebook';
-    
-    // Check if "Ask before action" is enabled
-    if (settings.integrations.askBeforeAction) {
-      const confirmed = window.confirm(`রোজ ${platform}-এ "${command.query}" খুলতে চাইছে। অনুমতি দেবেন?`);
-      if (!confirmed) {
-        showToast('অ্যাকশন বাতিল করা হয়েছে');
-        return;
+  const handleCommandAction = async (msgId: string, type: string, extra?: any) => {
+    if (
+      type !== 'yt_file_selected' &&
+      type !== 'yt_prepare_reply' &&
+      type !== 'fb_file_selected' &&
+      type !== 'fb_prepare_reply'
+    ) {
+      removePendingApproval(msgId);
+    }
+    const msg = messages.find(m => m.id === msgId);
+    if (!msg) return;
+
+    if (type === 'whatsapp_bill' && msg.bill) {
+      const bill = msg.bill;
+      const askSaveBill = settings.permissionRules?.saveOrSendBill ?? true;
+      const askSendWa = settings.permissionRules?.sendWhatsappMessenger ?? true;
+
+      if (askSaveBill) {
+        const confirmSave = window.confirm(`কাস্টমার "${bill.customerName}" এর জন্য ${bill.total} টাকার বিলটি সেভ করতে চান?`);
+        if (!confirmSave) {
+          showToast('বিল সেভ করা হয়নি');
+        } else {
+          saveAgentDataItem('arin', {
+            title: `Bill: ${bill.customerName}`,
+            customer: bill.customerName,
+            total: bill.total,
+            items: bill.items,
+            phone: bill.phone
+          });
+          showToast('বিল সেভ করা হয়েছে (Orders)');
+        }
+      } else {
+        saveAgentDataItem('arin', {
+          title: `Bill: ${bill.customerName}`,
+          customer: bill.customerName,
+          total: bill.total,
+          items: bill.items,
+          phone: bill.phone
+        });
       }
+
+      if (askSendWa) {
+        const confirmWa = window.confirm('WhatsApp এ বিলটি পাঠাতে চান?');
+        if (!confirmWa) return;
+      }
+
+      const win = window.open(bill.waUrl, '_blank');
+      if (!win) showToast('ব্রাউজার ট্যাব ব্লক করেছে।');
+      return;
     }
 
-    const win = window.open(command.url, '_blank');
-    if (!win) {
-      showToast('ব্রাউজার ট্যাব ব্লক করেছে। চ্যাটে দেওয়া বাটনে ক্লিক করুন।');
-    } else {
-      showToast(`${platform} খোলা হয়েছে`);
+    if (msg.emailDraft && (type === 'gmail_approve' || type === 'gmail_cancel')) {
+      if (type === 'gmail_cancel') {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId && m.emailDraft
+              ? { ...m, emailDraft: { ...m.emailDraft, status: 'cancelled' } }
+              : m
+          )
+        );
+        logFileAction({
+          name: `Gmail: ${msg.emailDraft.to}`,
+          size: 0,
+          status: 'Denied',
+          timestamp: new Date().toISOString(),
+        });
+        showToast('ইমেইল পাঠানো বাতিল করা হয়েছে');
+        return;
+      }
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId && m.emailDraft
+            ? { ...m, emailDraft: { ...m.emailDraft, status: 'sending', error: undefined } }
+            : m
+        )
+      );
+
+      const res = await sendGmailMessage(
+        settings.integrations.gmail?.accessToken || '',
+        msg.emailDraft.to,
+        msg.emailDraft.subject,
+        msg.emailDraft.body
+      );
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId && m.emailDraft
+            ? {
+                ...m,
+                emailDraft: {
+                  ...m.emailDraft,
+                  status: res.ok ? 'sent' : 'error',
+                  error: res.error,
+                },
+              }
+            : m
+        )
+      );
+
+      logFileAction({
+        name: `Gmail: ${msg.emailDraft.to}`,
+        size: 0,
+        status: res.ok ? 'Approved' : 'Denied',
+        timestamp: new Date().toISOString(),
+      });
+      showToast(res.ok ? 'Gmail এর মাধ্যমে ইমেইল পাঠানো হয়েছে!' : `Gmail ত্রুটি: ${res.error}`);
+      return;
+    }
+
+    if (type === 'yt_file_selected' && extra?.fileName) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId && m.ytUpload
+            ? { ...m, ytUpload: { ...m.ytUpload, fileName: extra.fileName, error: undefined } }
+            : m
+        )
+      );
+      return;
+    }
+
+    if (type === 'yt_prepare_reply' && extra?.parentId && extra?.text) {
+      const askYtPostReply = Boolean(settings.permissionRules?.postReplyFbYoutube ?? true);
+      const replyMeta = {
+        parentId: String(extra.parentId),
+        text: String(extra.text),
+        status: askYtPostReply ? ('pending' as const) : ('posting' as const),
+      };
+      setMessages((prev) =>
+        prev.map((m) => (m.id === msgId ? { ...m, ytReply: replyMeta } : m))
+      );
+
+      if (askYtPostReply) {
+        addPendingApproval({
+          id: msgId,
+          ruleKey: 'postReplyFbYoutube',
+          title: 'Post or reply on Facebook / YouTube',
+          detail: `YouTube Reply (${replyMeta.parentId}): "${replyMeta.text}"`,
+          timestamp: new Date().toISOString(),
+          payload: {
+            kind: 'yt_reply',
+            msgId,
+            ytReply: replyMeta,
+          },
+        });
+      } else {
+        const res = await postYouTubeCommentReply(
+          settings.integrations.youtube?.accessToken || '',
+          replyMeta.parentId,
+          replyMeta.text
+        );
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId && m.ytReply
+              ? {
+                  ...m,
+                  ytReply: {
+                    ...m.ytReply,
+                    status: res.ok ? 'posted' : 'error',
+                    error: res.error,
+                  },
+                }
+              : m
+          )
+        );
+      }
+      return;
+    }
+
+    if (msg.ytUpload && (type === 'yt_upload_approve' || type === 'yt_upload_cancel')) {
+      if (type === 'yt_upload_cancel') {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId && m.ytUpload
+              ? { ...m, ytUpload: { ...m.ytUpload, status: 'cancelled' } }
+              : m
+          )
+        );
+        logFileAction({
+          name: `YouTube Upload: ${msg.ytUpload.title}`,
+          size: 0,
+          status: 'Denied',
+          timestamp: new Date().toISOString(),
+        });
+        showToast('ইউটিউব ভিডিও আপলোড বাতিল করা হয়েছে');
+        return;
+      }
+
+      const file = getYouTubeUploadFile(msgId);
+      if (!file) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId && m.ytUpload
+              ? {
+                  ...m,
+                  ytUpload: {
+                    ...m.ytUpload,
+                    status: 'error',
+                    error: 'অনুগ্রহ করে আগে একটি ভিডিও ফাইল সিলেক্ট করুন।',
+                  },
+                }
+              : m
+          )
+        );
+        showToast('অনুগ্রহ করে আগে একটি ভিডিও ফাইল সিলেক্ট করুন');
+        return;
+      }
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId && m.ytUpload
+            ? { ...m, ytUpload: { ...m.ytUpload, status: 'uploading', error: undefined } }
+            : m
+        )
+      );
+
+      const res = await uploadYouTubeVideoResumable(
+        settings.integrations.youtube?.accessToken || '',
+        file,
+        msg.ytUpload.title,
+        msg.ytUpload.description,
+        msg.ytUpload.tags
+      );
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId && m.ytUpload
+            ? {
+                ...m,
+                ytUpload: {
+                  ...m.ytUpload,
+                  status: res.ok ? 'uploaded' : 'error',
+                  videoId: res.videoId,
+                  error: res.error,
+                },
+              }
+            : m
+        )
+      );
+
+      logFileAction({
+        name: `YouTube Upload: ${msg.ytUpload.title}`,
+        size: file.size,
+        status: res.ok ? 'Approved' : 'Denied',
+        timestamp: new Date().toISOString(),
+      });
+      showToast(res.ok ? 'ইউটিউবে ভিডিও আপলোড সফল হয়েছে!' : `YouTube ত্রুটি: ${res.error}`);
+      return;
+    }
+
+    if (msg.ytReply && (type === 'yt_reply_approve' || type === 'yt_reply_cancel')) {
+      if (type === 'yt_reply_cancel') {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId && m.ytReply
+              ? { ...m, ytReply: { ...m.ytReply, status: 'cancelled' } }
+              : m
+          )
+        );
+        logFileAction({
+          name: `YouTube Reply: ${msg.ytReply.parentId}`,
+          size: 0,
+          status: 'Denied',
+          timestamp: new Date().toISOString(),
+        });
+        showToast('ইউটিউব কমেন্ট রিপ্লাই বাতিল করা হয়েছে');
+        return;
+      }
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId && m.ytReply
+            ? { ...m, ytReply: { ...m.ytReply, status: 'posting', error: undefined } }
+            : m
+        )
+      );
+
+      const res = await postYouTubeCommentReply(
+        settings.integrations.youtube?.accessToken || '',
+        msg.ytReply.parentId,
+        msg.ytReply.text
+      );
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId && m.ytReply
+            ? {
+                ...m,
+                ytReply: {
+                  ...m.ytReply,
+                  status: res.ok ? 'posted' : 'error',
+                  error: res.error,
+                },
+              }
+            : m
+        )
+      );
+
+      logFileAction({
+        name: `YouTube Reply: ${msg.ytReply.parentId}`,
+        size: 0,
+        status: res.ok ? 'Approved' : 'Denied',
+        timestamp: new Date().toISOString(),
+      });
+      showToast(res.ok ? 'ইউটিউব কমেন্টে রিপ্লাই পোস্ট হয়েছে!' : `YouTube ত্রুটি: ${res.error}`);
+      return;
+    }
+
+    if (type === 'fb_file_selected' && extra?.fileName) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId && m.fbPost
+            ? {
+                ...m,
+                fbPost: {
+                  ...m.fbPost,
+                  fileName: extra.fileName,
+                  mediaType: extra.mediaType || m.fbPost.mediaType,
+                  error: undefined,
+                },
+              }
+            : m
+        )
+      );
+      return;
+    }
+
+    if (type === 'fb_prepare_reply' && extra?.commentId && extra?.text) {
+      const askFbPostReply = Boolean(settings.permissionRules?.postReplyFbYoutube ?? true);
+      const replyMeta = {
+        commentId: String(extra.commentId),
+        text: String(extra.text),
+        status: askFbPostReply ? ('pending' as const) : ('posting' as const),
+      };
+      setMessages((prev) =>
+        prev.map((m) => (m.id === msgId ? { ...m, fbReply: replyMeta } : m))
+      );
+
+      if (askFbPostReply) {
+        addPendingApproval({
+          id: msgId,
+          ruleKey: 'postReplyFbYoutube',
+          title: 'Post or reply on Facebook / YouTube',
+          detail: `Facebook Reply (${replyMeta.commentId}): "${replyMeta.text}"`,
+          timestamp: new Date().toISOString(),
+          payload: {
+            kind: 'fb_reply',
+            msgId,
+            fbReply: replyMeta,
+          },
+        });
+      } else {
+        const res = await postFacebookCommentReply(
+          settings.integrations.facebookPage?.accessToken || '',
+          replyMeta.commentId,
+          replyMeta.text
+        );
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId && m.fbReply
+              ? {
+                  ...m,
+                  fbReply: {
+                    ...m.fbReply,
+                    status: res.ok ? 'posted' : 'error',
+                    error: res.error,
+                  },
+                }
+              : m
+          )
+        );
+      }
+      return;
+    }
+
+    if (msg.fbPost && (type === 'fb_post_approve' || type === 'fb_post_cancel')) {
+      if (type === 'fb_post_cancel') {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId && m.fbPost
+              ? { ...m, fbPost: { ...m.fbPost, status: 'cancelled' } }
+              : m
+          )
+        );
+        logFileAction({
+          name: `Facebook Post (${msg.fbPost.mediaType})`,
+          size: 0,
+          status: 'Denied',
+          timestamp: new Date().toISOString(),
+        });
+        showToast('ফেসবুক পেজ পোস্ট বাতিল করা হয়েছে');
+        return;
+      }
+
+      const file = getFacebookMediaFile(msgId);
+      if (msg.fbPost.mediaType !== 'text' && !file) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId && m.fbPost
+              ? {
+                  ...m,
+                  fbPost: {
+                    ...m.fbPost,
+                    status: 'error',
+                    error:
+                      m.fbPost.mediaType === 'photo'
+                        ? 'অনুগ্রহ করে আগে একটি ছবি (Photo) ফাইল সিলেক্ট করুন।'
+                        : 'অনুগ্রহ করে আগে একটি ভিডিও (Video) ফাইল সিলেক্ট করুন।',
+                  },
+                }
+              : m
+          )
+        );
+        showToast('অনুগ্রহ করে আগে ফাইল সিলেক্ট করুন');
+        return;
+      }
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId && m.fbPost
+            ? { ...m, fbPost: { ...m.fbPost, status: 'posting', error: undefined } }
+            : m
+        )
+      );
+
+      const res = await publishFacebookPagePost(
+        settings.integrations.facebookPage?.pageId || '',
+        settings.integrations.facebookPage?.accessToken || '',
+        msg.fbPost.mediaType,
+        msg.fbPost.message,
+        file
+      );
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId && m.fbPost
+            ? {
+                ...m,
+                fbPost: {
+                  ...m.fbPost,
+                  status: res.ok ? 'posted' : 'error',
+                  postId: res.postId,
+                  error: res.error,
+                },
+              }
+            : m
+        )
+      );
+
+      logFileAction({
+        name: `Facebook Post (${msg.fbPost.mediaType})`,
+        size: file?.size || 0,
+        status: res.ok ? 'Approved' : 'Denied',
+        timestamp: new Date().toISOString(),
+      });
+      showToast(res.ok ? 'ফেসবুক পেজে পোস্ট সফল হয়েছে!' : `Facebook ত্রুটি: ${res.error}`);
+      return;
+    }
+
+    if (msg.fbReply && (type === 'fb_reply_approve' || type === 'fb_reply_cancel')) {
+      if (type === 'fb_reply_cancel') {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId && m.fbReply
+              ? { ...m, fbReply: { ...m.fbReply, status: 'cancelled' } }
+              : m
+          )
+        );
+        logFileAction({
+          name: `Facebook Reply: ${msg.fbReply.commentId}`,
+          size: 0,
+          status: 'Denied',
+          timestamp: new Date().toISOString(),
+        });
+        showToast('ফেসবুক কমেন্ট রিপ্লাই বাতিল করা হয়েছে');
+        return;
+      }
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId && m.fbReply
+            ? { ...m, fbReply: { ...m.fbReply, status: 'posting', error: undefined } }
+            : m
+        )
+      );
+
+      const res = await postFacebookCommentReply(
+        settings.integrations.facebookPage?.accessToken || '',
+        msg.fbReply.commentId,
+        msg.fbReply.text
+      );
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId && m.fbReply
+            ? {
+                ...m,
+                fbReply: {
+                  ...m.fbReply,
+                  status: res.ok ? 'posted' : 'error',
+                  error: res.error,
+                },
+              }
+            : m
+        )
+      );
+
+      logFileAction({
+        name: `Facebook Reply: ${msg.fbReply.commentId}`,
+        size: 0,
+        status: res.ok ? 'Approved' : 'Denied',
+        timestamp: new Date().toISOString(),
+      });
+      showToast(res.ok ? 'ফেসবুক কমেন্টে রিপ্লাই পোস্ট হয়েছে!' : `Facebook ত্রুটি: ${res.error}`);
+      return;
+    }
+
+    if (msg.pcAction && (type === 'pc_action_approve' || type === 'pc_action_cancel')) {
+      if (type === 'pc_action_cancel') {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId && m.pcAction
+              ? { ...m, pcAction: { ...m.pcAction, status: 'cancelled' } }
+              : m
+          )
+        );
+        logFileAction({
+          name: `PC Action (${msg.pcAction.actionType}): ${msg.pcAction.target}`,
+          size: 0,
+          status: 'Denied',
+          timestamp: new Date().toISOString(),
+        });
+        showToast('PC অ্যাকশন বাতিল করা হয়েছে');
+        return;
+      }
+
+      const permEnabled =
+        msg.pcAction.actionType === 'open_app_url' || msg.pcAction.actionType === 'play_media'
+          ? (settings.pcControl.openAppsAndWebsites ?? true)
+          : msg.pcAction.actionType === 'type_text'
+          ? (settings.pcControl.typeTextAndPressKeys ?? true)
+          : msg.pcAction.actionType === 'send_whatsapp' ||
+            msg.pcAction.actionType === 'send_messenger'
+          ? Boolean(
+              (settings.pcControl.openAppsAndWebsites ?? true) &&
+                (settings.pcControl.typeTextAndPressKeys ?? true)
+            )
+          : (settings.pcControl.readOrOpenFiles ?? true);
+
+      if (!permEnabled) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId && m.pcAction
+              ? {
+                  ...m,
+                  pcAction: {
+                    ...m.pcAction,
+                    status: 'error',
+                    error: 'Settings > PC Control-এ এই পারমিশনটি বন্ধ (OFF) করা আছে।',
+                  },
+                }
+              : m
+          )
+        );
+        showToast('Settings > PC Control-এ এই পারমিশনটি বন্ধ করা আছে');
+        return;
+      }
+
+      const res = await executePcAction(
+        msg.pcAction.actionType,
+        msg.pcAction.target,
+        msg.pcAction.text
+      );
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId && m.pcAction
+            ? {
+                ...m,
+                pcAction: {
+                  ...m.pcAction,
+                  status: res.ok ? 'done' : 'error',
+                  resultText: res.resultText,
+                  error: res.error,
+                },
+              }
+            : m
+        )
+      );
+
+      logFileAction({
+        name: `PC Action (${msg.pcAction.actionType}): ${msg.pcAction.target}`,
+        size: 0,
+        status: res.ok ? 'Approved' : 'Denied',
+        timestamp: new Date().toISOString(),
+      });
+      showToast(res.ok ? res.resultText || 'PC অ্যাকশন সম্পন্ন হয়েছে' : `ত্রুটি: ${res.error}`);
+      return;
+    }
+
+    if (msg.actionCommand) {
+      if (type === 'action_command_cancel') {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId && m.actionCommand
+              ? { ...m, actionCommand: { ...m.actionCommand, status: 'cancelled' } }
+              : m
+          )
+        );
+        logFileAction({
+          name: `${msg.actionCommand.type}: ${msg.actionCommand.query}`,
+          size: 0,
+          status: 'Denied',
+          timestamp: new Date().toISOString(),
+        });
+        showToast('কাজটি বাতিল করা হয়েছে');
+        return;
+      }
+
+      if (type === 'action_command_approve') {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId && m.actionCommand
+              ? { ...m, actionCommand: { ...m.actionCommand, status: 'ready' } }
+              : m
+          )
+        );
+        logFileAction({
+          name: `${msg.actionCommand.type}: ${msg.actionCommand.query}`,
+          size: 0,
+          status: 'Approved',
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      const command = msg.actionCommand;
+      const win = window.open(command.url, '_blank', 'noopener,noreferrer');
+      if (!win) showToast('ব্রাউজার ট্যাব ব্লক করেছে।');
     }
   };
+
+  useEffect(() => {
+    (window as any).onCommandAction = handleCommandAction;
+    registerPendingApprovalResolver((item, approved) => {
+      if (item.payload?.kind === 'save_file' && item.payload.msgId) {
+        handleSaveFileApproval(item.payload.msgId, approved);
+        return;
+      }
+      if (item.payload?.kind === 'gmail_send' && item.payload.msgId) {
+        handleCommandAction(
+          item.payload.msgId,
+          approved ? 'gmail_approve' : 'gmail_cancel'
+        );
+        return;
+      }
+      if (item.payload?.kind === 'whatsapp_bill' && item.payload.bill) {
+        if (approved) {
+          saveAgentDataItem('arin', {
+            title: `Bill: ${item.payload.bill.customerName}`,
+            customer: item.payload.bill.customerName,
+            total: item.payload.bill.total,
+            items: item.payload.bill.items,
+            phone: item.payload.bill.phone,
+          });
+          logFileAction({
+            name: `Bill: ${item.payload.bill.customerName}`,
+            size: 0,
+            status: 'Approved',
+            timestamp: new Date().toISOString(),
+          });
+        } else {
+          logFileAction({
+            name: `Bill: ${item.payload.bill.customerName}`,
+            size: 0,
+            status: 'Denied',
+            timestamp: new Date().toISOString(),
+          });
+        }
+        return;
+      }
+      if (item.payload?.kind === 'action_command' && item.payload.msgId) {
+        handleCommandAction(
+          item.payload.msgId,
+          approved ? 'action_command_approve' : 'action_command_cancel'
+        );
+        return;
+      }
+      if (item.payload?.kind === 'yt_upload' && item.payload.msgId) {
+        handleCommandAction(
+          item.payload.msgId,
+          approved ? 'yt_upload_approve' : 'yt_upload_cancel'
+        );
+        return;
+      }
+      if (item.payload?.kind === 'yt_reply' && item.payload.msgId) {
+        handleCommandAction(
+          item.payload.msgId,
+          approved ? 'yt_reply_approve' : 'yt_reply_cancel'
+        );
+        return;
+      }
+      if (item.payload?.kind === 'fb_post' && item.payload.msgId) {
+        handleCommandAction(
+          item.payload.msgId,
+          approved ? 'fb_post_approve' : 'fb_post_cancel'
+        );
+        return;
+      }
+      if (item.payload?.kind === 'fb_reply' && item.payload.msgId) {
+        handleCommandAction(
+          item.payload.msgId,
+          approved ? 'fb_reply_approve' : 'fb_reply_cancel'
+        );
+        return;
+      }
+      if (item.payload?.kind === 'pc_action' && item.payload.msgId) {
+        handleCommandAction(
+          item.payload.msgId,
+          approved ? 'pc_action_approve' : 'pc_action_cancel'
+        );
+        return;
+      }
+    });
+    return () => {
+      delete (window as any).onCommandAction;
+      registerPendingApprovalResolver(null);
+    };
+  }, [messages, settings.integrations, settings.permissionRules]);
 
   handleSendMessageRef.current = handleSendMessage;
 

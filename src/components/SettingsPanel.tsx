@@ -54,15 +54,23 @@ import {
   RoseReplyLengthType,
   RoseCharacterConfig,
   ChatMessage,
+  PermissionRulesConfig,
+  PendingApprovalAction,
 } from '../types';
 import { IDENTITY_AGENTS, IDENTITY_AGENTS_MAP } from '../config/identity';
 import { voiceChat } from '../lib/voiceChat';
 import { ttsService } from '../lib/tts';
-import { getFileActionLogs } from '../lib/approvals';
+import {
+  getFileActionLogs,
+  getPendingApprovals,
+  subscribePendingApprovals,
+  resolvePendingApproval,
+} from '../lib/approvals';
 import {
   settingsService,
   DEFAULT_APP_SETTINGS,
   DEFAULT_ROSE_CHARACTER_SETTINGS,
+  DEFAULT_PERMISSION_RULES,
 } from '../services/settings';
 import { ConnectionsSettings } from './ConnectionsSettings';
 import { AiModelSettings } from './AiModelSettings';
@@ -272,6 +280,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const [roseTestInput, setRoseTestInput] = useState<string>('আজকের কাজ কেমন চলছে?');
   const [roseTestLoading, setRoseTestLoading] = useState<boolean>(false);
   const [fileLogs, setFileLogs] = useState<any[]>([]);
+  const [pendingApprovals, setPendingApprovals] = useState<PendingApprovalAction[]>(() =>
+    getPendingApprovals()
+  );
   const [roseTestOutput, setRoseTestOutput] = useState<{
     text: string;
     emotion?: string;
@@ -317,6 +328,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   useEffect(() => {
     if (activeScreen === 'approvals') {
       getFileActionLogs().then(setFileLogs);
+      setPendingApprovals(getPendingApprovals());
+      return subscribePendingApprovals((items) => {
+        setPendingApprovals(items);
+        getFileActionLogs().then(setFileLogs);
+      });
     }
   }, [activeScreen]);
 
@@ -1879,18 +1895,122 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           )}
 
           {/* ========================================================= */}
-          {/* PC CONTROL SUB-SCREEN (FILES & FOLDER)                   */}
+          {/* PC CONTROL SUB-SCREEN (DESKTOP STATUS, PERMISSIONS & FILES) */}
           {/* ========================================================= */}
-          {activeScreen === 'pc-control' && (
-            <div className="space-y-4 animate-in fade-in duration-200">
-              <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <FolderOpen className="w-5 h-5 text-sky-400" />
-                    <h4 className="text-xs font-extrabold text-white uppercase tracking-wider">
-                      Files & Folder
-                    </h4>
+          {activeScreen === 'pc-control' &&
+            (() => {
+              const isDesktopConnected =
+                typeof window !== 'undefined' &&
+                Boolean((window as any).roseDesktop?.isConnected?.());
+
+              const pcPerms = [
+                {
+                  key: 'openAppsAndWebsites' as const,
+                  label: 'Open apps and websites',
+                  sub: 'পিসিতে অ্যাপ এবং ওয়েবসাইট খোলার অনুমতি',
+                },
+                {
+                  key: 'typeTextAndPressKeys' as const,
+                  label: 'Type text and press keys',
+                  sub: 'পিসিতে টেক্সট টাইপ এবং কী প্রেসের অনুমতি',
+                },
+                {
+                  key: 'readOrOpenFiles' as const,
+                  label: 'Read or open files',
+                  sub: 'পিসিতে ফাইল পড়া বা খোলার অনুমতি',
+                },
+                {
+                  key: 'cameraAndMic' as const,
+                  label: 'Camera and mic',
+                  sub: 'ক্যামেরা এবং মাইক্রোফোন ব্যবহারের অনুমতি',
+                },
+              ];
+
+              const handleTogglePcPerm = (
+                key:
+                  | 'openAppsAndWebsites'
+                  | 'typeTextAndPressKeys'
+                  | 'readOrOpenFiles'
+                  | 'cameraAndMic'
+              ) => {
+                const currentVal = localSettings.pcControl[key] ?? true;
+                const updated: AppSettings = {
+                  ...localSettings,
+                  pcControl: {
+                    ...localSettings.pcControl,
+                    [key]: !currentVal,
+                  },
+                };
+                setLocalSettings(updated);
+                settingsService.saveSettings(updated);
+                onUpdateSettings(updated);
+              };
+
+              return (
+                <div className="space-y-4 animate-in fade-in duration-200">
+                  {/* Desktop App Connection Status + 4 Permission Toggles */}
+                  <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-4">
+                    <div className="flex items-center justify-between pb-3 border-b border-sky-900/50">
+                      <div className="flex items-center gap-2">
+                        <Monitor className="w-5 h-5 text-sky-400" />
+                        <h4 className="text-xs font-extrabold text-white uppercase tracking-wider">
+                          Desktop App & PC Permissions
+                        </h4>
+                      </div>
+                      <span
+                        className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border ${
+                          isDesktopConnected
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.35)]'
+                            : 'bg-slate-800 text-slate-300 border-slate-700'
+                        }`}
+                      >
+                        {isDesktopConnected
+                          ? 'Desktop app connected'
+                          : 'Desktop app not connected'}
+                      </span>
+                    </div>
+
+                    <div className="space-y-2">
+                      {pcPerms.map((perm) => {
+                        const enabled = localSettings.pcControl[perm.key] ?? true;
+                        return (
+                          <div
+                            key={perm.key}
+                            className="p-3 rounded-xl bg-slate-950/60 border border-white/5 flex items-center justify-between gap-3"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <p className="text-xs font-bold text-white">{perm.label}</p>
+                              <p className="text-[10px] text-slate-400 mt-0.5">{perm.sub}</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleTogglePcPerm(perm.key)}
+                              className={`w-12 h-6 rounded-full p-0.5 transition-colors flex items-center shrink-0 ${
+                                enabled
+                                  ? 'bg-emerald-500 justify-end shadow-[0_0_12px_rgba(16,185,129,0.5)]'
+                                  : 'bg-slate-700 justify-start'
+                              }`}
+                            >
+                              <span className="w-5 h-5 rounded-full bg-white shadow-md transition-transform" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[10px] text-amber-200 leading-relaxed">
+                      প্রতিটি PC অ্যাকশন প্রথমে Approvals নিয়মের মধ্য দিয়ে যাবে। লক করা কাজগুলো (Delete files, Payments, Passwords, Install/uninstall) কখনোই এক্সপোজ করা হয় না।
+                    </div>
                   </div>
+
+                  <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <FolderOpen className="w-5 h-5 text-sky-400" />
+                        <h4 className="text-xs font-extrabold text-white uppercase tracking-wider">
+                          Files & Folder
+                        </h4>
+                      </div>
                   <button
                     type="button"
                     onClick={() =>
@@ -1978,7 +2098,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 <span>Save PC Control Settings</span>
               </button>
             </div>
-          )}
+              );
+            })()}
 
           {/* ========================================================= */}
           {/* SECURITY & PRIVACY SUB-SCREEN                              */}
@@ -2016,52 +2137,305 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           )}
 
           {/* ========================================================= */}
-          {/* APPROVALS SUB-SCREEN (LOGS)                                */}
+          {/* APPROVALS SUB-SCREEN (PERMISSION RULES & WAITING QUEUE)    */}
           {/* ========================================================= */}
-          {activeScreen === 'approvals' && (
-            <div className="space-y-4 animate-in fade-in duration-200">
-              <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-4">
-                <div className="flex items-center gap-2 pb-3 border-b border-sky-900/50">
-                  <CheckSquare className="w-5 h-5 text-sky-400" />
-                  <h4 className="text-xs font-extrabold text-white uppercase tracking-wider">
-                    File Approvals Log
-                  </h4>
-                </div>
+          {activeScreen === 'approvals' &&
+            (() => {
+              const rules: PermissionRulesConfig = {
+                ...DEFAULT_PERMISSION_RULES,
+                ...(localSettings.permissionRules || {}),
+                deleteFiles: true,
+                paymentsOrTransfer: true,
+                passwordsOrPrivateData: true,
+                installOrUninstallSoftware: true,
+              };
 
-                <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1 no-scrollbar">
-                  {fileLogs.length === 0 ? (
-                    <div className="py-10 text-center space-y-2">
-                      <Clock className="w-8 h-8 text-slate-700 mx-auto" />
-                      <p className="text-xs text-slate-500">কোনো কাজের ইতিহাস নেই।</p>
-                    </div>
-                  ) : (
-                    fileLogs.map((log, idx) => (
-                      <div key={idx} className="p-3 rounded-xl bg-slate-950/60 border border-white/5 flex items-center justify-between gap-3 animate-in slide-in-from-left-2 duration-150">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-[10px] font-bold text-white truncate">{log.name}</span>
-                            <span className="text-[8px] px-1 py-0.5 rounded bg-slate-800 text-slate-400 uppercase">
-                              {(log.size / 1024).toFixed(1)} KB
-                            </span>
-                          </div>
-                          <p className="text-[9px] text-slate-500 mt-0.5">
-                            {new Date(log.timestamp).toLocaleString()}
-                          </p>
-                        </div>
-                        <div className={`text-[9px] font-black uppercase px-2 py-1 rounded-lg border ${
-                          log.status === 'Saved' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-rose-500/10 text-rose-400 border-rose-500/30'
-                        }`}>
-                          {log.status === 'Saved' ? 'সেভ হয়েছে' : 'বাতিল'}
-                        </div>
+              const toggleableRows: Array<{
+                key: keyof PermissionRulesConfig;
+                label: string;
+              }> = [
+                { key: 'sendWhatsappMessenger', label: 'Send WhatsApp / Messenger message' },
+                { key: 'postReplyFbYoutube', label: 'Post or reply on Facebook / YouTube' },
+                { key: 'sendEmailApplyJob', label: 'Send email / apply for a job' },
+                { key: 'saveOrSendBill', label: 'Save or send a bill' },
+                { key: 'openWebsiteOrAppPc', label: 'Open website or app on PC' },
+                { key: 'typeTextOrKeysPc', label: 'Type text or press keys on PC' },
+                { key: 'readOrOpenFilesPc', label: 'Read or open files on PC' },
+                { key: 'playMusicVideo', label: 'Play music / video' },
+              ];
+
+              const lockedRows: Array<{
+                key: keyof PermissionRulesConfig;
+                label: string;
+              }> = [
+                { key: 'deleteFiles', label: 'Delete files' },
+                { key: 'paymentsOrTransfer', label: 'Payments or money transfer' },
+                { key: 'passwordsOrPrivateData', label: 'Passwords or private data' },
+                { key: 'installOrUninstallSoftware', label: 'Install or uninstall software' },
+              ];
+
+              const handleToggleRule = (key: keyof PermissionRulesConfig) => {
+                const nextRules: PermissionRulesConfig = {
+                  ...rules,
+                  [key]: !rules[key],
+                  deleteFiles: true,
+                  paymentsOrTransfer: true,
+                  passwordsOrPrivateData: true,
+                  installOrUninstallSoftware: true,
+                };
+                const updated: AppSettings = {
+                  ...localSettings,
+                  permissionRules: nextRules,
+                };
+                setLocalSettings(updated);
+                settingsService.saveSettings(updated);
+                onUpdateSettings(updated);
+                onToast(
+                  nextRules[key]
+                    ? 'Rule set to: Ask me first'
+                    : 'Rule set to: Allow automatically'
+                );
+              };
+
+              return (
+                <div className="space-y-4 animate-in fade-in duration-200">
+                  {/* 1. Permission rules list */}
+                  <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-3">
+                    <div className="flex items-center justify-between pb-3 border-b border-sky-900/50">
+                      <div className="flex items-center gap-2">
+                        <Shield className="w-5 h-5 text-sky-400" />
+                        <h4 className="text-xs font-extrabold text-white uppercase tracking-wider">
+                          Permission rules
+                        </h4>
                       </div>
-                    ))
-                  )}
-                </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const updated: AppSettings = {
+                            ...localSettings,
+                            permissionRules: rules,
+                          };
+                          setLocalSettings(updated);
+                          settingsService.saveSettings(updated);
+                          onUpdateSettings(updated);
+                          onToast('Permission rules saved');
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/50 text-sky-300 text-[10px] font-extrabold transition-all flex items-center gap-1.5"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Save</span>
+                      </button>
+                    </div>
 
-                <p className="text-[10px] text-slate-500 italic text-center">শেষ ৫০টি কাজের তালিকা দেখানো হচ্ছে।</p>
-              </div>
-            </div>
-          )}
+                    <div className="space-y-2">
+                      {toggleableRows.map((row) => {
+                        const isAskFirst = Boolean(rules[row.key]);
+                        return (
+                          <div
+                            key={row.key}
+                            className="p-3 rounded-xl bg-slate-950/60 border border-white/5 flex items-center justify-between gap-3"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <p className="text-xs font-bold text-white">{row.label}</p>
+                              <p
+                                className={`text-[10px] font-semibold mt-0.5 ${
+                                  isAskFirst ? 'text-amber-300' : 'text-emerald-400'
+                                }`}
+                              >
+                                {isAskFirst ? 'Ask me first' : 'Allow automatically'}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleRule(row.key)}
+                              className={`relative w-12 h-6 rounded-full transition-colors duration-200 border shrink-0 ${
+                                isAskFirst
+                                  ? 'bg-sky-500/30 border-sky-400'
+                                  : 'bg-slate-800 border-slate-700'
+                              }`}
+                              title={isAskFirst ? 'Ask me first (ON)' : 'Allow automatically (OFF)'}
+                            >
+                              <span
+                                className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full transition-transform duration-200 ${
+                                  isAskFirst
+                                    ? 'translate-x-6 bg-sky-300 shadow-[0_0_8px_rgba(56,189,248,0.8)]'
+                                    : 'translate-x-0 bg-slate-400'
+                                }`}
+                              />
+                            </button>
+                          </div>
+                        );
+                      })}
+
+                      {/* 2. Locked rows ("Ask me first" permanently) */}
+                      {lockedRows.map((row) => (
+                        <div
+                          key={row.key}
+                          className="p-3 rounded-xl bg-slate-950/40 border border-amber-500/20 flex items-center justify-between gap-3 opacity-90"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                              <p className="text-xs font-bold text-white">{row.label}</p>
+                            </div>
+                            <p className="text-[10px] font-semibold text-amber-300 mt-0.5">
+                              Ask me first (Locked)
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            disabled
+                            className="relative w-12 h-6 rounded-full bg-amber-500/25 border border-amber-400/50 cursor-not-allowed shrink-0"
+                            title="Locked to Ask me first"
+                          >
+                            <span className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full translate-x-6 bg-amber-300" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* 5. Actions waiting for your OK */}
+                  <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-3">
+                    <div className="flex items-center justify-between pb-3 border-b border-sky-900/50">
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-5 h-5 text-amber-400" />
+                        <h4 className="text-xs font-extrabold text-white uppercase tracking-wider">
+                          Actions waiting for your OK
+                        </h4>
+                      </div>
+                      <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/40 text-[10px] font-extrabold text-amber-300">
+                        {pendingApprovals.length}
+                      </span>
+                    </div>
+
+                    <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1 no-scrollbar">
+                      {pendingApprovals.length === 0 ? (
+                        <div className="py-6 text-center space-y-1.5">
+                          <p className="text-xs text-slate-400">No actions waiting for your OK.</p>
+                        </div>
+                      ) : (
+                        pendingApprovals.map((item) => (
+                          <div
+                            key={item.id}
+                            className="p-3 rounded-xl bg-slate-950/60 border border-amber-500/30 space-y-2"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-bold text-white truncate">{item.title}</p>
+                                <p className="text-[11px] text-slate-300 break-words mt-0.5">
+                                  {item.detail}
+                                </p>
+                                <p className="text-[9px] text-slate-500 mt-1">
+                                  {new Date(item.timestamp).toLocaleString()}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 pt-1">
+                              {item.payload?.url ? (
+                                <a
+                                  href={item.payload.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={() => {
+                                    resolvePendingApproval(item.id, true);
+                                    onToast('Action approved');
+                                  }}
+                                  className="flex-1 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-[10px] font-extrabold transition-colors flex items-center justify-center gap-1 shadow-sm"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                  Approve
+                                </a>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    resolvePendingApproval(item.id, true);
+                                    onToast('Action approved');
+                                  }}
+                                  className="flex-1 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-[10px] font-extrabold transition-colors flex items-center justify-center gap-1 shadow-sm"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                  Approve
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  resolvePendingApproval(item.id, false);
+                                  onToast('Action rejected');
+                                }}
+                                className="flex-1 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 text-[10px] font-extrabold transition-colors flex items-center justify-center gap-1"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                                Reject
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Existing File Approvals Log */}
+                  <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-4">
+                    <div className="flex items-center gap-2 pb-3 border-b border-sky-900/50">
+                      <CheckSquare className="w-5 h-5 text-sky-400" />
+                      <h4 className="text-xs font-extrabold text-white uppercase tracking-wider">
+                        File Approvals Log
+                      </h4>
+                    </div>
+
+                    <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1 no-scrollbar">
+                      {fileLogs.length === 0 ? (
+                        <div className="py-8 text-center space-y-2">
+                          <Clock className="w-8 h-8 text-slate-700 mx-auto" />
+                          <p className="text-xs text-slate-500">কোনো কাজের ইতিহাস নেই।</p>
+                        </div>
+                      ) : (
+                        fileLogs.map((log, idx) => (
+                          <div
+                            key={idx}
+                            className="p-3 rounded-xl bg-slate-950/60 border border-white/5 flex items-center justify-between gap-3 animate-in slide-in-from-left-2 duration-150"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-bold text-white truncate">
+                                  {log.name}
+                                </span>
+                                <span className="text-[8px] px-1 py-0.5 rounded bg-slate-800 text-slate-400 uppercase">
+                                  {(log.size / 1024).toFixed(1)} KB
+                                </span>
+                              </div>
+                              <p className="text-[9px] text-slate-500 mt-0.5">
+                                {new Date(log.timestamp).toLocaleString()}
+                              </p>
+                            </div>
+                            <div
+                              className={`text-[9px] font-black uppercase px-2 py-1 rounded-lg border ${
+                                log.status === 'Saved' || log.status === 'Approved'
+                                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                                  : 'bg-rose-500/10 text-rose-400 border-rose-500/30'
+                              }`}
+                            >
+                              {log.status === 'Saved'
+                                ? 'সেভ হয়েছে'
+                                : log.status === 'Approved'
+                                ? 'অনুমোদিত'
+                                : 'বাতিল'}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    <p className="text-[10px] text-slate-500 italic text-center">
+                      শেষ ৫০টি কাজের তালিকা দেখানো হচ্ছে।
+                    </p>
+                  </div>
+                </div>
+              );
+            })()}
 
           {/* ========================================================= */}
           {/* INTEGRATIONS & ACCESS SUB-SCREEN                          */}

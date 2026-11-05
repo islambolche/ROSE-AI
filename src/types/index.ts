@@ -64,10 +64,20 @@ export interface ChatMessage {
   fromVoice?: boolean;
   fileMeta?: FileAttachmentMeta;
   saveFileMeta?: SaveFileRequestMeta;
+  bill?: BillMeta;
+  emailDraft?: EmailDraftMeta;
+  ytUpload?: YouTubeUploadMeta;
+  ytComments?: YouTubeCommentsMeta;
+  ytReply?: YouTubeReplyMeta;
+  fbPost?: FacebookPostMeta;
+  fbComments?: FacebookCommentsMeta;
+  fbReply?: FacebookReplyMeta;
+  pcAction?: PcActionMeta;
   actionCommand?: {
     type: string;
     query: string;
     url: string;
+    status?: 'pending' | 'ready' | 'cancelled';
   };
   errorMeta?: {
     model?: string;
@@ -237,9 +247,21 @@ export interface SaveFileRequestMeta {
   timestamp: string;
 }
 
+export interface BillMeta {
+  customerName: string;
+  phone: string;
+  items: Array<{ name: string; quantity: number; price: number }>;
+  total: number;
+  waUrl: string;
+}
+
 export interface PcControlConfig {
   allowFileSave: boolean;
   workFolderName?: string;
+  openAppsAndWebsites?: boolean;
+  typeTextAndPressKeys?: boolean;
+  readOrOpenFiles?: boolean;
+  cameraAndMic?: boolean;
 }
 
 export interface WhatsAppConfig {
@@ -269,6 +291,139 @@ export interface IntegrationsConfig {
   askBeforeAction: boolean; // default true
 }
 
+export interface PermissionRulesConfig {
+  sendWhatsappMessenger: boolean;
+  postReplyFbYoutube: boolean;
+  sendEmailApplyJob: boolean;
+  saveOrSendBill: boolean;
+  openWebsiteOrAppPc: boolean;
+  typeTextOrKeysPc: boolean;
+  readOrOpenFilesPc: boolean;
+  playMusicVideo: boolean;
+  deleteFiles: boolean;
+  paymentsOrTransfer: boolean;
+  passwordsOrPrivateData: boolean;
+  installOrUninstallSoftware: boolean;
+}
+
+export interface EmailDraftMeta {
+  to: string;
+  subject: string;
+  body: string;
+  status?: 'pending' | 'sending' | 'sent' | 'cancelled' | 'error';
+  error?: string;
+}
+
+export interface YouTubeUploadMeta {
+  title: string;
+  description: string;
+  tags: string[];
+  fileName?: string;
+  status?: 'pending' | 'uploading' | 'uploaded' | 'cancelled' | 'error';
+  videoId?: string;
+  error?: string;
+}
+
+export interface YouTubeCommentItem {
+  threadId: string;
+  topLevelCommentId: string;
+  author: string;
+  text: string;
+  publishedAt: string;
+}
+
+export interface YouTubeCommentsMeta {
+  videoId: string;
+  status?: 'loading' | 'loaded' | 'error';
+  comments: YouTubeCommentItem[];
+  error?: string;
+}
+
+export interface YouTubeReplyMeta {
+  parentId: string;
+  text: string;
+  status?: 'pending' | 'posting' | 'posted' | 'cancelled' | 'error';
+  replyId?: string;
+  error?: string;
+}
+
+export interface FacebookPostMeta {
+  mediaType: 'text' | 'photo' | 'video';
+  message: string;
+  fileName?: string;
+  status?: 'pending' | 'posting' | 'posted' | 'cancelled' | 'error';
+  postId?: string;
+  error?: string;
+}
+
+export interface FacebookCommentItem {
+  id: string;
+  author: string;
+  text: string;
+  createdTime: string;
+}
+
+export interface FacebookCommentsMeta {
+  postId: string;
+  status?: 'loading' | 'loaded' | 'error';
+  comments: FacebookCommentItem[];
+  error?: string;
+}
+
+export interface FacebookReplyMeta {
+  commentId: string;
+  text: string;
+  status?: 'pending' | 'posting' | 'posted' | 'cancelled' | 'error';
+  replyId?: string;
+  error?: string;
+}
+
+export interface PcActionMeta {
+  actionType:
+    | 'open_app_url'
+    | 'type_text'
+    | 'read_file'
+    | 'send_whatsapp'
+    | 'send_messenger'
+    | 'play_media';
+  target: string;
+  text?: string;
+  status?: 'pending' | 'done' | 'cancelled' | 'error';
+  resultText?: string;
+  error?: string;
+}
+
+export interface PendingApprovalAction {
+  id: string;
+  ruleKey: keyof PermissionRulesConfig;
+  title: string;
+  detail: string;
+  timestamp: string;
+  payload?: {
+    kind:
+      | 'action_command'
+      | 'whatsapp_bill'
+      | 'save_file'
+      | 'gmail_send'
+      | 'yt_upload'
+      | 'yt_reply'
+      | 'fb_post'
+      | 'fb_reply'
+      | 'pc_action';
+    msgId?: string;
+    url?: string;
+    bill?: BillMeta;
+    emailDraft?: EmailDraftMeta;
+    ytUpload?: YouTubeUploadMeta;
+    ytReply?: YouTubeReplyMeta;
+    fbPost?: FacebookPostMeta;
+    fbReply?: FacebookReplyMeta;
+    pcAction?: PcActionMeta;
+    fileName?: string;
+    fileContent?: string;
+  };
+}
+
 export interface AppSettings {
   userName: string; // default ''
   userAddressAs: UserAddressAsType; // default 'শুধু নাম'
@@ -284,6 +439,7 @@ export interface AppSettings {
   pcControl: PcControlConfig;
   voiceCaptions: boolean; // default false
   integrations: IntegrationsConfig;
+  permissionRules: PermissionRulesConfig;
 }
 
 
