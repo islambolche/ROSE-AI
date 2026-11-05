@@ -1,0 +1,9 @@
+{
+  "name": "ROSE AI BUSINESS ASSISTANT",
+  "description": "Professional desktop AI business command center featuring Rose and her team of specialized AI agents for sales, delivery, customer communication, and business analytics.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

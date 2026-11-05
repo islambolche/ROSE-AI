@@ -1,0 +1,623 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { Agent, ChatMessage, ChatFontSizeType, AgentId, DelegationMode } from '../types';
+import {
+  Paperclip,
+  SendHorizontal,
+  User,
+  Trash2,
+  Mic,
+  Square,
+  ChevronDown,
+  ChevronRight,
+} from 'lucide-react';
+import { IDENTITY_AGENTS_MAP } from '../config/identity';
+
+interface ChatBoxProps {
+  selectedAgent: Agent;
+  messages: ChatMessage[];
+  onSendMessage: (text: string, options?: { fromVoice?: boolean }) => void;
+  onClearChat?: () => void;
+  isTyping?: boolean;
+  fontSize?: ChatFontSizeType;
+  interimSpeech?: string;
+  isSpeaking?: boolean;
+  onStopSpeaking?: () => void;
+  isMicOn?: boolean;
+  onToggleMic?: () => void;
+  voiceLevel?: number;
+  voiceDotHeights?: number[];
+  workingAgents?: AgentId[];
+  workingMode?: DelegationMode;
+}
+
+export const ChatBox: React.FC<ChatBoxProps> = ({
+  selectedAgent,
+  messages,
+  onSendMessage,
+  onClearChat,
+  isTyping = false,
+  fontSize = 'medium',
+  interimSpeech = '',
+  isSpeaking = false,
+  onStopSpeaking,
+  isMicOn = false,
+  onToggleMic,
+  voiceLevel = 0,
+  voiceDotHeights = [4, 4, 4, 4, 4],
+  workingAgents = [],
+  workingMode = 'ask',
+}) => {
+  const [inputText, setInputText] = useState('');
+  const [expandedAskIds, setExpandedAskIds] = useState<Record<string, boolean>>({});
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, isTyping, interimSpeech, isSpeaking, workingAgents]);
+
+  const handleSend = () => {
+    if (!inputText.trim() || isTyping) return;
+    onSendMessage(inputText.trim());
+    setInputText('');
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInputText(e.target.value);
+    e.target.style.height = 'auto';
+    e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+  };
+
+  const getAgentAvatar = (id: string) => {
+    return IDENTITY_AGENTS_MAP[id as AgentId]?.avatar || `/avatars/${id}.png`;
+  };
+
+  const getAgentColor = (id: string) => {
+    return IDENTITY_AGENTS_MAP[id as AgentId]?.color || '#38bdf8';
+  };
+
+  const getFontSizeClass = () => {
+    switch (fontSize) {
+      case 'small':
+        return 'text-[11px] sm:text-xs leading-normal';
+      case 'large':
+        return 'text-sm sm:text-base leading-relaxed';
+      case 'medium':
+      default:
+        return 'text-xs sm:text-[13px] leading-relaxed';
+    }
+  };
+
+  const currentIdent = IDENTITY_AGENTS_MAP[selectedAgent.id] || IDENTITY_AGENTS_MAP.rose;
+
+  return (
+    <aside className="w-[27%] min-w-[320px] max-w-[420px] h-full flex flex-col bg-gradient-to-b from-[#060c1d] via-[#040814] to-[#030610] border-r border-sky-500/30 select-none relative z-20 shrink-0 shadow-[4px_0_20px_rgba(0,10,30,0.7)]">
+      {/* Top subtle bar with Clear chat button for the selected agent */}
+      <div className="h-8 px-4 border-b border-sky-950/60 bg-[#050b1a]/80 flex items-center justify-between shrink-0 text-[11px] text-slate-400">
+        <span className="font-semibold text-[10px] text-sky-300/80 uppercase tracking-wider font-mono">
+          {currentIdent.name} • Chat
+        </span>
+
+        {onClearChat && (
+          <button
+            type="button"
+            onClick={onClearChat}
+            title={`${currentIdent.name}-এর চ্যাট ইতিহাস মুছুন`}
+            className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-rose-300 p-1 rounded hover:bg-rose-950/30 transition-colors"
+          >
+            <Trash2 className="w-3 h-3" />
+            <span>Clear chat</span>
+          </button>
+        )}
+      </div>
+
+      {/* Messages List starts directly below header bar */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 no-scrollbar">
+        {messages.length === 0 && !isTyping && (
+          <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400 space-y-2">
+            <div
+              className="w-12 h-12 rounded-full overflow-hidden border-2 flex items-center justify-center bg-[#07122b]"
+              style={{
+                borderColor: currentIdent.color,
+                boxShadow: `0 0 16px ${currentIdent.color}50`,
+              }}
+            >
+              <img
+                src={currentIdent.avatar}
+                alt={currentIdent.name}
+                className="w-full h-full object-cover"
+              />
+            </div>
+            <p className="text-xs font-bold text-white">
+              {currentIdent.name} ({currentIdent.role})
+            </p>
+            <p className="text-[11px] text-slate-400 max-w-[200px] leading-relaxed">
+              যেকোনো প্রশ্ন লিখে পাঠান, {currentIdent.name} উত্তর দেবে।
+            </p>
+          </div>
+        )}
+
+        {messages.map((msg) => {
+          // 1) Delegation line in Rose's chat: "Rose → Mira: <কাজ>"
+          if (msg.teamMeta?.kind === 'delegation') {
+            return (
+              <div
+                key={msg.id}
+                className="px-2 py-1 text-[11px] text-slate-400 flex items-center gap-1.5 animate-in fade-in duration-150 select-text"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-500 shrink-0" />
+                <span className="leading-snug">{msg.text}</span>
+              </div>
+            );
+          }
+
+          // 2) ASK collapsible gray line in Rose's chat: "Rose → Mira থেকে তথ্য নিল" (চাপলে ভাঁজ খুলে এজেন্টের রিপোর্ট দেখা যাবে)
+          if (msg.teamMeta?.kind === 'ask_fold' || msg.teamMeta?.kind === 'report') {
+            const repAgentId = (msg.teamMeta.reportAgentId || msg.sender) as AgentId;
+            const repIdent = IDENTITY_AGENTS_MAP[repAgentId] || IDENTITY_AGENTS_MAP.mira;
+            const isExpanded = Boolean(expandedAskIds[msg.id]);
+            const reportContent = msg.teamMeta.reportText || msg.text;
+
+            return (
+              <div key={msg.id} className="px-1 animate-in fade-in duration-150 select-text">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setExpandedAskIds((prev) => ({
+                      ...prev,
+                      [msg.id]: !prev[msg.id],
+                    }))
+                  }
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900/70 hover:bg-slate-800/80 border border-slate-700/60 text-[11px] text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+                >
+                  {isExpanded ? (
+                    <ChevronDown className="w-3 h-3 text-slate-400 shrink-0" />
+                  ) : (
+                    <ChevronRight className="w-3 h-3 text-slate-400 shrink-0" />
+                  )}
+                  <span>Rose → {repIdent.name} থেকে তথ্য নিল</span>
+                </button>
+
+                {isExpanded && (
+                  <div
+                    style={{ borderLeftColor: repIdent.color }}
+                    className="mt-1.5 ml-3 mr-2 rounded-xl bg-[#071229]/95 border border-sky-900/60 border-l-4 p-2.5 space-y-1 text-xs text-slate-200 animate-in fade-in duration-150"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className="text-[11px] font-extrabold"
+                        style={{ color: repIdent.color }}
+                      >
+                        {repIdent.name}-এর রিপোর্ট:
+                      </span>
+                      <span className="text-[10px] text-slate-500">{msg.timestamp}</span>
+                    </div>
+                    <p className="whitespace-pre-wrap text-slate-200 leading-relaxed">
+                      {reportContent}
+                    </p>
+                  </div>
+                )}
+              </div>
+            );
+          }
+
+          // 3) "Rose-এর কাজ" entry inside the specialist's individual chat
+          if (msg.teamMeta?.kind === 'rose_task') {
+            const specIdent = IDENTITY_AGENTS_MAP[msg.sender as AgentId] || currentIdent;
+            return (
+              <div
+                key={msg.id}
+                style={{ borderLeftColor: IDENTITY_AGENTS_MAP.rose.color }}
+                className="rounded-xl bg-[#08132c]/90 border border-sky-900/50 border-l-4 p-2.5 space-y-1.5 animate-in fade-in duration-150 select-text"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="px-1.5 py-0.5 rounded bg-rose-500/15 border border-rose-500/30 text-[10px] font-bold text-rose-300">
+                    Rose-এর কাজ
+                  </span>
+                  <span className="text-[10px] text-slate-500">{msg.timestamp}</span>
+                </div>
+                {msg.teamMeta.taskText && (
+                  <p className="text-[11px] text-slate-400">
+                    <span className="font-bold text-rose-300">Rose:</span> {msg.teamMeta.taskText}
+                  </p>
+                )}
+                <p className="text-xs text-slate-200 whitespace-pre-wrap">
+                  <span className="font-bold" style={{ color: specIdent.color }}>
+                    {specIdent.name}:
+                  </span>{' '}
+                  {msg.teamMeta.reportText || msg.text}
+                </p>
+              </div>
+            );
+          }
+
+          const isUser = msg.sender === 'user';
+          const color = isUser ? '#38bdf8' : getAgentColor(msg.sender);
+          const avatarUrl = isUser ? '' : getAgentAvatar(msg.sender);
+          const senderDisplayName = isUser
+            ? 'You'
+            : IDENTITY_AGENTS_MAP[msg.sender as AgentId]?.name || msg.senderName;
+
+          return (
+            <div
+              key={msg.id}
+              className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} animate-in fade-in duration-200`}
+            >
+              {/* Sender Name & Timestamp Header */}
+              <div
+                className={`flex items-center gap-2 text-[11px] mb-1 px-1 ${
+                  isUser ? 'flex-row-reverse text-slate-300' : 'flex-row text-slate-300'
+                }`}
+              >
+                {!isUser ? (
+                  <>
+                    <span
+                      className="font-extrabold text-xs tracking-wide"
+                      style={{ color }}
+                    >
+                      {senderDisplayName}
+                    </span>
+                    <span className="text-[11px] text-slate-400">{msg.timestamp}</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-[11px] text-slate-400">{msg.timestamp}</span>
+                    <span className="font-extrabold text-xs text-sky-200 flex items-center gap-1">
+                      {msg.fromVoice && (
+                        <span title="ভয়েস ইনপুট" className="flex items-center text-emerald-400">
+                          <Mic className="w-3 h-3 shrink-0" />
+                        </span>
+                      )}
+                      You
+                    </span>
+                  </>
+                )}
+              </div>
+
+              {/* Message Bubble + 40px Round Avatar */}
+              <div
+                className={`flex items-start gap-2.5 max-w-[94%] ${
+                  isUser ? 'flex-row-reverse' : 'flex-row'
+                }`}
+              >
+                {/* 40px Round Avatar */}
+                <div className="shrink-0 mt-0.5">
+                  {isUser ? (
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-sky-600 via-blue-600 to-indigo-600 border border-sky-400/60 shadow-[0_0_12px_rgba(56,189,248,0.4)] flex items-center justify-center text-white">
+                      <User className="w-5 h-5 drop-shadow" />
+                    </div>
+                  ) : (
+                    <div
+                      className="relative w-10 h-10 rounded-full overflow-hidden border-2 flex items-center justify-center bg-[#07122b]"
+                      style={{
+                        borderColor: color,
+                        boxShadow: `0 0 12px ${color}60`,
+                      }}
+                    >
+                      <img
+                        src={avatarUrl}
+                        alt={senderDisplayName}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Bubble Text */}
+                <div
+                  className={`rounded-2xl px-3.5 py-2.5 ${getFontSizeClass()} shadow-md ${
+                    isUser
+                      ? 'bg-gradient-to-r from-[#0062cc] via-[#0070f3] to-[#0080ff] text-white rounded-tr-none border border-sky-400/40 shadow-[0_4px_16px_rgba(0,112,243,0.35)]'
+                      : msg.isSystem
+                      ? 'bg-rose-950/60 text-rose-200 rounded-tl-none border border-rose-500/50 shadow-[0_4px_16px_rgba(244,63,94,0.3)]'
+                      : 'bg-[#0a1633] text-slate-100 rounded-tl-none border border-sky-800/60 shadow-[0_4px_16px_rgba(0,15,40,0.6)]'
+                  }`}
+                >
+                  <p className="whitespace-pre-wrap">{msg.text}</p>
+                  {msg.errorMeta?.subtext && (
+                    <div
+                      className={`mt-2 pt-1.5 border-t text-[11px] text-slate-400 select-text ${
+                        msg.isSystem
+                          ? 'border-rose-500/30 font-mono tracking-tight'
+                          : 'border-sky-800/40'
+                      }`}
+                    >
+                      {msg.errorMeta.subtext}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+
+        {/* Delegated Specialists Working ("খুঁজছে..." ঢেউ) */}
+        {selectedAgent.id === 'rose' && workingAgents.length > 0 && (
+          <div className="space-y-2 animate-in fade-in duration-150">
+            {workingAgents.map((agId) => {
+              const agIdent = IDENTITY_AGENTS_MAP[agId];
+              if (!agIdent) return null;
+              return (
+                <div
+                  key={agId}
+                  className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-[#081533]/90 border border-sky-900/60 max-w-[85%]"
+                  style={{ borderColor: `${agIdent.color}55` }}
+                >
+                  <div
+                    className="w-7 h-7 rounded-full overflow-hidden border shrink-0 bg-[#050c1e]"
+                    style={{
+                      borderColor: agIdent.color,
+                      boxShadow: `0 0 10px ${agIdent.color}60`,
+                    }}
+                  >
+                    <img
+                      src={agIdent.avatar}
+                      alt={agIdent.name}
+                      className="w-full h-full object-cover animate-pulse"
+                    />
+                  </div>
+                  <span
+                    className="text-xs font-extrabold tracking-wide"
+                    style={{ color: agIdent.color }}
+                  >
+                    {agIdent.name}
+                  </span>
+                  <span className="text-[11px] text-slate-300 font-semibold">
+                    {workingMode === 'handoff' ? 'উত্তর দিচ্ছে...' : 'খুঁজছে...'}
+                  </span>
+                  <div className="flex items-center gap-1 h-3 ml-1">
+                    <span
+                      className="w-1.5 h-1.5 rounded-full animate-bounce"
+                      style={{ backgroundColor: agIdent.color, animationDelay: '0ms' }}
+                    />
+                    <span
+                      className="w-1.5 h-1.5 rounded-full animate-bounce"
+                      style={{ backgroundColor: agIdent.color, animationDelay: '150ms' }}
+                    />
+                    <span
+                      className="w-1.5 h-1.5 rounded-full animate-bounce"
+                      style={{ backgroundColor: agIdent.color, animationDelay: '300ms' }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Selected Agent Typing Wave */}
+        {isTyping && workingAgents.length === 0 && (
+          <div className="flex items-start gap-2.5 max-w-[94%] animate-in fade-in duration-200">
+            <div
+              className="relative w-10 h-10 rounded-full overflow-hidden border-2 flex items-center justify-center bg-[#07122b] shrink-0"
+              style={{
+                borderColor: currentIdent.color,
+                boxShadow: `0 0 14px ${currentIdent.color}70`,
+              }}
+            >
+              <img
+                src={currentIdent.avatar}
+                alt={currentIdent.name}
+                className="w-full h-full object-cover animate-pulse"
+              />
+            </div>
+
+            <div
+              className="rounded-2xl rounded-tl-none px-4 py-3 bg-[#0a1633] border border-sky-800/60 flex items-center gap-2 shadow-[0_4px_16px_rgba(0,15,40,0.6)]"
+              style={{ borderColor: `${currentIdent.color}60` }}
+            >
+              <span className="text-xs font-semibold text-slate-300">
+                {currentIdent.name} typing
+              </span>
+              <div className="flex items-center gap-1 h-3">
+                <span
+                  className="w-1.5 h-1.5 rounded-full animate-bounce"
+                  style={{ backgroundColor: currentIdent.color, animationDelay: '0ms' }}
+                />
+                <span
+                  className="w-1.5 h-1.5 rounded-full animate-bounce"
+                  style={{ backgroundColor: currentIdent.color, animationDelay: '150ms' }}
+                />
+                <span
+                  className="w-1.5 h-1.5 rounded-full animate-bounce"
+                  style={{ backgroundColor: currentIdent.color, animationDelay: '300ms' }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* User Live Interim Voice Bubble ("শুনছি...") */}
+        {interimSpeech && (
+          <div className="flex flex-col items-end animate-in fade-in duration-150">
+            <div className="flex items-center gap-1.5 text-[11px] mb-1 px-1 flex-row-reverse text-slate-300">
+              <span className="font-extrabold text-xs text-sky-200 flex items-center gap-1">
+                <Mic className="w-3 h-3 text-emerald-400 animate-pulse" />
+                You
+              </span>
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-sky-300 border border-slate-700 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                শুনছি...
+              </span>
+            </div>
+
+            <div className="flex items-start gap-2.5 max-w-[94%] flex-row-reverse">
+              <div className="w-10 h-10 rounded-full bg-slate-800 border border-slate-600 shadow-[0_0_12px_rgba(56,189,248,0.25)] flex items-center justify-center text-emerald-400 shrink-0 mt-0.5">
+                <Mic className="w-5 h-5 animate-pulse" />
+              </div>
+
+              <div className="rounded-2xl rounded-tr-none px-3.5 py-2.5 bg-slate-800/95 text-slate-200 border border-slate-600 shadow-[0_4px_16px_rgba(0,0,0,0.5)]">
+                <p className="whitespace-pre-wrap text-xs sm:text-[13px]">{interimSpeech}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Agent Speaking Banner with "বলছে..." and Stop Button */}
+        {isSpeaking && (
+          <div className="flex items-center justify-between p-2.5 px-3 rounded-2xl bg-[#08183a]/90 border border-sky-400/50 shadow-[0_0_18px_rgba(56,189,248,0.35)] animate-in fade-in duration-200">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div
+                className="w-8 h-8 rounded-full overflow-hidden border-2 shrink-0 flex items-center justify-center bg-[#07122b]"
+                style={{
+                  borderColor: currentIdent.color,
+                  boxShadow: `0 0 10px ${currentIdent.color}`,
+                }}
+              >
+                <img
+                  src={currentIdent.avatar}
+                  alt={currentIdent.name}
+                  className="w-full h-full object-cover animate-pulse"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-xs font-bold text-white tracking-wide truncate">
+                  {currentIdent.name} বলছে...
+                </span>
+                <div className="flex items-center gap-0.5 h-3">
+                  <span className="w-1 bg-sky-400 rounded-full soundwave-1" />
+                  <span className="w-1 bg-sky-400 rounded-full soundwave-2" />
+                  <span className="w-1 bg-sky-400 rounded-full soundwave-3" />
+                  <span className="w-1 bg-sky-400 rounded-full soundwave-1" />
+                </div>
+              </div>
+            </div>
+
+            {onStopSpeaking && (
+              <button
+                type="button"
+                onClick={onStopSpeaking}
+                title="বলা থামান (Stop)"
+                className="px-2.5 py-1 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/50 text-rose-300 hover:text-white flex items-center gap-1.5 text-[11px] font-bold transition-all shadow-sm shrink-0"
+              >
+                <Square className="w-3 h-3 fill-current" />
+                <span>Stop</span>
+              </button>
+            )}
+          </div>
+        )}
+
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* 4. Bottom Input Row: Paperclip, Textarea message, Send Button */}
+      <div className="p-3 border-t border-sky-900/60 bg-[#060e22]/95 backdrop-blur-md shrink-0">
+        <div className="flex items-end gap-2 bg-[#09142e] border border-sky-500/40 focus-within:border-sky-400 focus-within:shadow-[0_0_15px_rgba(56,189,248,0.35)] rounded-2xl px-3 py-1.5 transition-all">
+          <button
+            type="button"
+            title="Attach file"
+            className="text-slate-400 hover:text-sky-300 transition-colors p-1.5 pb-2 shrink-0"
+          >
+            <Paperclip className="w-4 h-4 rotate-45" />
+          </button>
+
+          <textarea
+            ref={textareaRef}
+            rows={1}
+            value={inputText}
+            onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
+            placeholder={`Message ${currentIdent.name}...`}
+            disabled={isTyping}
+            className="flex-1 bg-transparent text-xs sm:text-sm text-white placeholder-slate-400 focus:outline-none min-w-0 py-1.5 resize-none max-h-28 disabled:opacity-60"
+          />
+
+          {/* Voice Level 5 Dots / Speaking Indicator + 36px Round Mic Button */}
+          <div className="flex items-center gap-1.5 shrink-0 mb-0.5">
+            {isSpeaking ? (
+              <div className="flex items-center gap-1">
+                <span className="px-1.5 py-0.5 rounded-md bg-sky-500/15 border border-sky-400/30 text-[10px] font-bold text-sky-300 animate-pulse select-none whitespace-nowrap">
+                  বলছে...
+                </span>
+                {onStopSpeaking && (
+                  <button
+                    type="button"
+                    onClick={onStopSpeaking}
+                    title="বলা থামান (Stop)"
+                    className="px-2 py-0.5 rounded-md bg-rose-500/20 hover:bg-rose-500/35 border border-rose-500/50 text-rose-300 hover:text-white flex items-center gap-1 text-[10px] font-bold transition-all whitespace-nowrap"
+                  >
+                    <Square className="w-2.5 h-2.5 fill-current" />
+                    <span>Stop</span>
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div
+                aria-label="Voice Level Indicator"
+                className={`flex items-center justify-center gap-[3px] h-6 px-1 transition-opacity duration-200 ${
+                  isMicOn ? 'opacity-100' : 'opacity-30'
+                }`}
+              >
+                {[0, 1, 2, 3, 4].map((idx) => {
+                  const isVoiceActive = isMicOn && voiceLevel > 0.03;
+                  const dotH = isVoiceActive
+                    ? Math.max(4, Math.min(22, voiceDotHeights[idx] ?? 4))
+                    : 4;
+                  return (
+                    <span
+                      key={idx}
+                      style={{
+                        width: '4px',
+                        height: `${dotH}px`,
+                      }}
+                      className={`rounded-full transition-all duration-75 ${
+                        isVoiceActive
+                          ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]'
+                          : 'bg-slate-400'
+                      }`}
+                    />
+                  );
+                })}
+              </div>
+            )}
+
+            {onToggleMic && (
+              <button
+                type="button"
+                onClick={onToggleMic}
+                title={isMicOn ? 'মাইক বন্ধ করুন' : 'মাইক চালু করুন'}
+                style={{ width: '36px', height: '36px' }}
+                className={`rounded-full flex items-center justify-center transition-all shrink-0 border ${
+                  isMicOn
+                    ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300 shadow-[0_0_12px_rgba(52,211,153,0.45)]'
+                    : 'bg-[#0c1d42] border-sky-500/30 text-slate-300 hover:text-white hover:border-sky-400/60'
+                }`}
+              >
+                <Mic className={`w-4 h-4 ${isMicOn ? 'text-emerald-300' : ''}`} />
+              </button>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={handleSend}
+            disabled={!inputText.trim() || isTyping}
+            title={isTyping ? 'Generating response...' : 'Send (Enter)'}
+            className={`w-8 h-8 rounded-full flex items-center justify-center transition-all shrink-0 mb-0.5 ${
+              inputText.trim() && !isTyping
+                ? 'bg-gradient-to-tr from-blue-600 to-sky-400 text-white shadow-[0_0_14px_rgba(56,189,248,0.7)] scale-105 active:scale-95'
+                : 'bg-blue-600/40 text-white/40 cursor-not-allowed'
+            }`}
+          >
+            <SendHorizontal className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    </aside>
+  );
+};
