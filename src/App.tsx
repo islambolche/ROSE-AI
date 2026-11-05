@@ -31,6 +31,7 @@ import {
   writeFileToFolder,
   downloadAsFile
 } from './lib/approvals';
+import { extractCommandSignal, getCommandUrl } from './lib/commands';
 
 const WELCOME_ADDRESS_OPTIONS: UserAddressAsType[] = [
   'শুধু নাম',
@@ -435,12 +436,15 @@ export default function App() {
               currentHistory,
               {
                 onRoseIntro: (introText, emotion) => {
-                  const { cleanText, saveRequest } = extractSaveFileSignal(introText);
+                  const { cleanText: textAfterSave, saveRequest } = extractSaveFileSignal(introText);
+                  const { cleanText: textAfterCommand, command } = extractCommandSignal(textAfterSave);
                   
+                  const actionCommand = command ? { ...command, url: getCommandUrl(command) } : undefined;
+
                   const introRecord = dbService.addMessage({
                     agent_id: 'rose',
                     role: 'agent',
-                    content: cleanText,
+                    content: textAfterCommand,
                     device: 'pc',
                     team_meta: saveRequest ? {
                       kind: 'save_file'
@@ -456,9 +460,11 @@ export default function App() {
                       size: new Blob([saveRequest.content]).size,
                       status: 'pending',
                       timestamp: new Date().toISOString()
-                    } : undefined
+                    } : undefined,
+                    actionCommand
                   };
                   setMessages((prev) => [...prev, introMsg]);
+                  if (actionCommand) handleCommandAction(actionCommand);
                 },
                 onWorkingAgentsChange: (agentIds, mode) => {
                   setWorkingAgents(agentIds);
@@ -562,12 +568,15 @@ export default function App() {
 
       // 4. Save final answer / summary to persistent db ONLY if Rose is the answering party (ASK or direct)
       if (!result.skipRoseFinalMessage) {
-        const { cleanText, saveRequest } = extractSaveFileSignal(result.text);
+        const { cleanText: textAfterSave, saveRequest } = extractSaveFileSignal(result.text);
+        const { cleanText: textAfterCommand, command } = extractCommandSignal(textAfterSave);
+
+        const actionCommand = command ? { ...command, url: getCommandUrl(command) } : undefined;
 
         const agentRecord = dbService.addMessage({
           agent_id: selectedAgentId,
           role: 'agent',
-          content: cleanText,
+          content: textAfterCommand,
           device: 'pc',
           is_system: result.isError,
           error_subtext: result.errorMeta?.subtext,
@@ -585,10 +594,12 @@ export default function App() {
             size: new Blob([saveRequest.content]).size,
             status: 'pending',
             timestamp: new Date().toISOString()
-          } : undefined
+          } : undefined,
+          actionCommand
         };
 
         setMessages((prev) => [...prev, agentChatMessage]);
+        if (actionCommand) handleCommandAction(actionCommand);
       }
 
       // 5. Hands-free voice loop: speak answer aloud if Mic is ON, Voice reply is ON, and NOT an error
@@ -670,6 +681,27 @@ export default function App() {
       setIsTyping(false);
       setWorkingAgents([]);
       setOfficePhases({});
+    }
+  };
+
+  const handleCommandAction = async (command: { type: string; query: string; url: string }) => {
+    const isYt = command.type.includes('youtube');
+    const platform = isYt ? 'YouTube' : 'Facebook';
+    
+    // Check if "Ask before action" is enabled
+    if (settings.integrations.askBeforeAction) {
+      const confirmed = window.confirm(`রোজ ${platform}-এ "${command.query}" খুলতে চাইছে। অনুমতি দেবেন?`);
+      if (!confirmed) {
+        showToast('অ্যাকশন বাতিল করা হয়েছে');
+        return;
+      }
+    }
+
+    const win = window.open(command.url, '_blank');
+    if (!win) {
+      showToast('ব্রাউজার ট্যাব ব্লক করেছে। চ্যাটে দেওয়া বাটনে ক্লিক করুন।');
+    } else {
+      showToast(`${platform} খোলা হয়েছে`);
     }
   };
 

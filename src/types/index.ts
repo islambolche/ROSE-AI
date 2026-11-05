@@ -64,6 +64,11 @@ export interface ChatMessage {
   fromVoice?: boolean;
   fileMeta?: FileAttachmentMeta;
   saveFileMeta?: SaveFileRequestMeta;
+  actionCommand?: {
+    type: string;
+    query: string;
+    url: string;
+  };
   errorMeta?: {
     model?: string;
     statusCode?: number | string;
@@ -246,13 +251,19 @@ export interface GoogleAuthConfig {
   accessToken: string;
   refreshToken: string;
   expiryDate: number;
+  clientId: string;
+}
+
+export interface FacebookConfig {
+  accessToken: string;
+  pageId: string;
 }
 
 export interface IntegrationsConfig {
   pcAccess: boolean;
   whatsapp: WhatsAppConfig;
   youtube: GoogleAuthConfig;
-  facebookPage: string; // Page access token
+  facebookPage: FacebookConfig;
   tiktok: string; // Access token
   gmail: GoogleAuthConfig;
   askBeforeAction: boolean; // default true

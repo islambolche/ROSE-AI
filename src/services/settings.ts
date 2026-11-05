@@ -123,10 +123,10 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettingsConfig = {
 export const DEFAULT_INTEGRATIONS: IntegrationsConfig = {
   pcAccess: false,
   whatsapp: { accessToken: '', phoneNumberId: '' },
-  youtube: { accessToken: '', refreshToken: '', expiryDate: 0 },
-  facebookPage: '',
+  youtube: { accessToken: '', refreshToken: '', expiryDate: 0, clientId: '' },
+  facebookPage: { accessToken: '', pageId: '' },
   tiktok: '',
-  gmail: { accessToken: '', refreshToken: '', expiryDate: 0 },
+  gmail: { accessToken: '', refreshToken: '', expiryDate: 0, clientId: '' },
   askBeforeAction: true,
 };
 
@@ -326,6 +326,12 @@ export const settingsService = {
           youtube: {
             ...DEFAULT_INTEGRATIONS.youtube,
             ...(parsed.integrations?.youtube || {}),
+          },
+          facebookPage: {
+            ...DEFAULT_INTEGRATIONS.facebookPage,
+            ...(typeof parsed.integrations?.facebookPage === 'string' 
+              ? { accessToken: parsed.integrations.facebookPage, pageId: '' } 
+              : (parsed.integrations?.facebookPage || {})),
           },
           gmail: {
             ...DEFAULT_INTEGRATIONS.gmail,

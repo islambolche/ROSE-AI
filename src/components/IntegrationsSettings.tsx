@@ -12,6 +12,8 @@ import {
   Loader2,
   ExternalLink,
   Clipboard,
+  Eye,
+  EyeOff,
   ShieldCheck,
   Video,
   Upload,
@@ -45,7 +47,7 @@ export const IntegrationsSettings: React.FC<IntegrationsSettingsProps> = ({
     pcAccess: { status: integrations.pcAccess ? 'ready' : 'not_set' },
     whatsapp: { status: integrations.whatsapp.accessToken ? 'ready' : 'not_set' },
     youtube: { status: integrations.youtube.accessToken ? 'ready' : 'not_set' },
-    facebookPage: { status: integrations.facebookPage ? 'ready' : 'not_set' },
+    facebookPage: { status: integrations.facebookPage.accessToken ? 'ready' : 'not_set' },
     tiktok: { status: integrations.tiktok ? 'ready' : 'not_set' },
     gmail: { status: integrations.gmail.accessToken ? 'ready' : 'not_set' },
   });
@@ -59,6 +61,7 @@ export const IntegrationsSettings: React.FC<IntegrationsSettingsProps> = ({
     facebook: { caption: string; hashtags: string; tags: string };
     tiktok: { caption: string; hashtags: string; tags: string };
   } | null>(null);
+  const [showFacebookToken, setShowFacebookToken] = useState(false);
 
   const handleTogglePcAccess = () => {
     const updated = { ...localIntegrations, pcAccess: !localIntegrations.pcAccess };
@@ -108,6 +111,163 @@ export const IntegrationsSettings: React.FC<IntegrationsSettingsProps> = ({
       }));
       onToast(hasValue ? `${provider} সংযোগ সফল!` : `${provider} সংযোগ ব্যর্থ`);
     }, 1000);
+  };
+
+  const handleConnectYouTube = () => {
+    const { clientId } = localIntegrations.youtube;
+    if (!clientId) {
+      onToast('প্রথমে Client ID সেভ করুন');
+      return;
+    }
+
+    if (!(window as any).google) {
+      onToast('Google API লোড হচ্ছে, একটু অপেক্ষা করুন');
+      return;
+    }
+
+    try {
+      const client = (window as any).google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.force-ssl',
+        callback: (response: any) => {
+          if (response.access_token) {
+            const updated = { 
+              ...localIntegrations, 
+              youtube: { 
+                ...localIntegrations.youtube, 
+                accessToken: response.access_token,
+                expiryDate: Date.now() + (response.expires_in * 1000)
+              } 
+            };
+            setLocalIntegrations(updated);
+            onSaveIntegrations(updated);
+            setConnectionStates(prev => ({
+              ...prev,
+              youtube: { status: 'ready', message: 'সংযুক্ত (Token Received)' }
+            }));
+            onToast('YouTube সংযোগ সফল!');
+          } else if (response.error) {
+            onToast(`ত্রুটি: ${response.error}`);
+          }
+        },
+      });
+      client.requestAccessToken();
+    } catch (err: any) {
+      onToast('YouTube Connect শুরু করতে সমস্যা হয়েছে');
+    }
+  };
+
+  const handleTestYouTube = async () => {
+    const { accessToken } = localIntegrations.youtube;
+    if (!accessToken) {
+      onToast('প্রথমে YouTube কানেক্ট করুন');
+      return;
+    }
+
+    setIsVerifying(prev => ({ ...prev, youtube: true }));
+    setConnectionStates(prev => ({
+      ...prev,
+      youtube: { status: 'checking', message: 'যাচাই করা হচ্ছে...' }
+    }));
+
+    try {
+      const response = await fetch('https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true', {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`
+        }
+      });
+      const data = await response.json();
+      
+      if (data.items && data.items.length > 0) {
+        const channelName = data.items[0].snippet.title;
+        setConnectionStates(prev => ({
+          ...prev,
+          youtube: { status: 'ready', message: `READY - ${channelName}` }
+        }));
+        onToast(`YouTube সংযোগ সফল: ${channelName}`);
+      } else {
+        const errMsg = data.error?.message || 'চ্যানেল পাওয়া যায়নি';
+        setConnectionStates(prev => ({
+          ...prev,
+          youtube: { status: 'error', message: errMsg }
+        }));
+        onToast(`YouTube ত্রুটি: ${errMsg}`);
+      }
+    } catch (err: any) {
+      setConnectionStates(prev => ({
+        ...prev,
+        youtube: { status: 'error', message: err.message || 'নেটওয়ার্ক ত্রুটি' }
+      }));
+      onToast('YouTube সংযোগ ব্যর্থ');
+    } finally {
+      setIsVerifying(prev => ({ ...prev, youtube: false }));
+    }
+  };
+
+  const handleTestFacebook = async () => {
+    const { accessToken, pageId } = localIntegrations.facebookPage;
+    if (!accessToken || !pageId) {
+      setConnectionStates(prev => ({
+        ...prev,
+        facebookPage: { status: 'error', message: 'Page ID ও Token উভয়ই প্রয়োজন' }
+      }));
+      onToast('Page ID ও Token উভয়ই প্রয়োজন');
+      return;
+    }
+
+    setIsVerifying(prev => ({ ...prev, facebookPage: true }));
+    setConnectionStates(prev => ({
+      ...prev,
+      facebookPage: { status: 'checking', message: 'যাচাই করা হচ্ছে...' }
+    }));
+
+    try {
+      // Use proxy or direct fetch. FB Graph API usually allows CORS for some apps, 
+      // but if it fails, the user will see an error.
+      const response = await fetch(`https://graph.facebook.com/v21.0/${pageId}?fields=name&access_token=${accessToken}`);
+      const data = await response.json();
+
+      if (data.name) {
+        setConnectionStates(prev => ({
+          ...prev,
+          facebookPage: { status: 'ready', message: `READY - ${data.name}` }
+        }));
+        onToast(`Facebook সংযোগ সফল: ${data.name}`);
+      } else {
+        const errMsg = data.error?.message || 'অজানা ত্রুটি';
+        setConnectionStates(prev => ({
+          ...prev,
+          facebookPage: { status: 'error', message: errMsg }
+        }));
+        onToast(`Facebook ত্রুটি: ${errMsg}`);
+      }
+    } catch (err: any) {
+      setConnectionStates(prev => ({
+        ...prev,
+        facebookPage: { status: 'error', message: err.message || 'নেটওয়ার্ক ত্রুটি' }
+      }));
+      onToast('Facebook সংযোগ ব্যর্থ');
+    } finally {
+      setIsVerifying(prev => ({ ...prev, facebookPage: false }));
+    }
+  };
+
+  const handlePasteFacebook = async () => {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        const text = await navigator.clipboard.readText();
+        if (text) {
+          setLocalIntegrations(prev => ({
+            ...prev,
+            facebookPage: { ...prev.facebookPage, accessToken: text.trim() }
+          }));
+          onToast('টোকেন পেস্ট করা হয়েছে');
+          return;
+        }
+      }
+    } catch {
+      onToast('ক্লিপবোর্ড পড়ার অনুমতি নেই');
+    }
   };
 
   const handleVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -290,57 +450,167 @@ export const IntegrationsSettings: React.FC<IntegrationsSettingsProps> = ({
         </div>
 
         {/* YouTube Card */}
-        <div className="p-4 rounded-2xl bg-[#081533] border border-sky-500/40 space-y-3">
+        <div className="p-4 rounded-2xl bg-[#081533] border border-sky-500/40 space-y-3 shadow-sm transition-all">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-rose-500/20 text-rose-300 flex items-center justify-center border border-white/10">
+              <div className="w-10 h-10 rounded-xl bg-rose-500/20 text-rose-300 flex items-center justify-center border border-white/10 shadow-[0_0_10px_rgba(244,63,94,0.2)]">
                 <Youtube className="w-5 h-5" />
               </div>
               <div>
-                <h4 className="text-xs font-black text-white tracking-wider">YouTube</h4>
+                <h4 className="text-xs font-black text-white tracking-wider font-display">YouTube</h4>
                 <p className="text-[10px] text-sky-200/80">(Google OAuth)</p>
               </div>
             </div>
             {renderStatusBadge(connectionStates.youtube.status)}
           </div>
-          <div className="flex justify-between items-center gap-2 pt-1">
-             <button className="flex-1 py-2 rounded-xl bg-[#071738] border border-sky-500/40 text-sky-300 text-xs font-bold flex items-center justify-center gap-2">
-                 <ExternalLink className="w-4 h-4" />
+
+          <div className="space-y-2.5">
+            <div className="space-y-1">
+              <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest ml-1">OAuth Client ID</label>
+              <input
+                type="text"
+                value={localIntegrations.youtube.clientId}
+                onChange={(e) => setLocalIntegrations(prev => ({ ...prev, youtube: { ...prev.youtube, clientId: e.target.value } }))}
+                placeholder="e.g. 123456...apps.googleusercontent.com"
+                className="w-full bg-[#050c20] border border-sky-900/80 focus:border-sky-400 focus:shadow-[0_0_10px_rgba(56,189,248,0.15)] rounded-xl px-3 py-1.5 text-xs font-mono text-white placeholder-slate-600 focus:outline-none transition-all"
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between text-[11px] px-1">
+            {connectionStates.youtube.message && (
+              <span className={`font-semibold truncate ${
+                connectionStates.youtube.status === 'ready' ? 'text-emerald-400' : 
+                connectionStates.youtube.status === 'error' ? 'text-rose-400' : 'text-slate-400'
+              }`}>
+                {connectionStates.youtube.message}
+              </span>
+            )}
+            {localIntegrations.youtube.accessToken && (
+              <span className="font-mono text-[9px] text-slate-500 ml-auto">
+                Token Active
+              </span>
+            )}
+          </div>
+
+          <div className="flex justify-between items-center gap-2 pt-2 border-t border-sky-950/60">
+             <button 
+               onClick={handleConnectYouTube}
+               className="flex-1 py-1.5 rounded-xl bg-[#071738] border border-sky-500/40 text-sky-300 text-xs font-bold flex items-center justify-center gap-2 hover:bg-[#0b2150] transition-all"
+             >
+                 <ExternalLink className="w-3.5 h-3.5" />
                  Connect Channel
              </button>
-             <button onClick={() => handleTest('youtube')} className="px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 text-white text-xs font-extrabold">Test</button>
+             <div className="flex items-center gap-2">
+               <button 
+                 onClick={handleTestYouTube} 
+                 disabled={isVerifying.youtube || !localIntegrations.youtube.accessToken}
+                 className="px-3 py-1.5 rounded-xl bg-[#071738] hover:bg-[#0b2150] border border-sky-500/40 text-sky-200 hover:text-white text-xs font-extrabold flex items-center gap-1.5 transition-all disabled:opacity-50"
+               >
+                 {isVerifying.youtube ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current text-sky-400" />}
+                 <span>Test</span>
+               </button>
+               <button 
+                 onClick={() => handleSaveField('youtube', localIntegrations.youtube)} 
+                 className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 hover:from-blue-500 hover:to-sky-400 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-[0_0_12px_rgba(56,189,248,0.3)] transition-all"
+               >
+                 <Check className="w-3.5 h-3.5 stroke-[3]" />
+                 <span>Save</span>
+               </button>
+             </div>
           </div>
         </div>
 
         {/* Facebook Page Card */}
-        <div className="p-4 rounded-2xl bg-[#081533] border border-sky-500/40 space-y-3">
+        <div className="p-4 rounded-2xl bg-[#081533] border border-sky-500/40 space-y-3 shadow-sm transition-all">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-blue-500/20 text-blue-300 flex items-center justify-center border border-white/10">
+              <div className="w-10 h-10 rounded-xl bg-blue-500/20 text-blue-300 flex items-center justify-center border border-white/10 shadow-[0_0_10px_rgba(59,130,246,0.2)]">
                 <Facebook className="w-5 h-5" />
               </div>
               <div>
-                <h4 className="text-xs font-black text-white tracking-wider">Facebook Page</h4>
-                <p className="text-[10px] text-sky-200/80">(Page Access Token)</p>
+                <h4 className="text-xs font-black text-white tracking-wider font-display">Facebook Page</h4>
+                <p className="text-[10px] text-sky-200/80">(Page API Access)</p>
               </div>
             </div>
             {renderStatusBadge(connectionStates.facebookPage.status)}
           </div>
-          <input
-            type="password"
-            value={localIntegrations.facebookPage}
-            onChange={(e) => setLocalIntegrations(prev => ({ ...prev, facebookPage: e.target.value }))}
-            placeholder="Page Access Token"
-            className="w-full bg-[#050c20] border border-sky-900/80 rounded-xl px-3 py-1.5 text-xs font-mono text-white placeholder-slate-600 focus:outline-none focus:border-sky-400"
-          />
-          <div className="flex justify-end gap-2 pt-1 border-t border-sky-950">
-            <button onClick={() => handleTest('facebookPage')} className="px-3 py-1.5 rounded-xl bg-[#071738] border border-sky-500/40 text-sky-200 text-xs font-extrabold flex items-center gap-1.5">
-                <Play className="w-3.5 h-3.5 fill-current text-sky-400" />
-                <span>Test</span>
+          
+          <div className="space-y-2.5">
+            <div className="space-y-1">
+              <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest ml-1">Page ID</label>
+              <input
+                type="text"
+                value={localIntegrations.facebookPage.pageId}
+                onChange={(e) => setLocalIntegrations(prev => ({ ...prev, facebookPage: { ...prev.facebookPage, pageId: e.target.value } }))}
+                placeholder="e.g. 123456789012345"
+                className="w-full bg-[#050c20] border border-sky-900/80 focus:border-sky-400 focus:shadow-[0_0_10px_rgba(56,189,248,0.15)] rounded-xl px-3 py-1.5 text-xs font-mono text-white placeholder-slate-600 focus:outline-none transition-all"
+              />
+            </div>
+            
+            <div className="space-y-1">
+              <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest ml-1">Page Access Token</label>
+              <div className="relative">
+                <div className="flex items-center bg-[#050c20] border border-sky-900/80 focus-within:border-sky-400 focus-within:shadow-[0_0_15px_rgba(56,189,248,0.2)] rounded-xl px-3 py-1.5 transition-all">
+                  <input
+                    type={showFacebookToken ? 'text' : 'password'}
+                    value={localIntegrations.facebookPage.accessToken}
+                    onChange={(e) => setLocalIntegrations(prev => ({ ...prev, facebookPage: { ...prev.facebookPage, accessToken: e.target.value } }))}
+                    placeholder="EAA..."
+                    className="flex-1 bg-transparent font-mono text-xs text-white placeholder-slate-600 focus:outline-none min-w-0 py-1"
+                  />
+                  <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                    <button
+                      type="button"
+                      onClick={handlePasteFacebook}
+                      className="px-2 py-1 rounded-lg bg-sky-950/90 hover:bg-sky-900 border border-sky-500/30 text-[10px] font-bold text-sky-300 hover:text-white flex items-center gap-1 transition-all"
+                    >
+                      <Clipboard className="w-3 h-3" />
+                      <span>Paste</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowFacebookToken(!showFacebookToken)}
+                      className="p-1 rounded-lg text-slate-400 hover:text-sky-300 transition-colors"
+                    >
+                      {showFacebookToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between text-[11px] px-1">
+            {connectionStates.facebookPage.message && (
+              <span className={`font-semibold truncate ${
+                connectionStates.facebookPage.status === 'ready' ? 'text-emerald-400' : 
+                connectionStates.facebookPage.status === 'error' ? 'text-rose-400' : 'text-slate-400'
+              }`}>
+                {connectionStates.facebookPage.message}
+              </span>
+            )}
+            <span className="font-mono text-slate-400 ml-auto">
+              Token length: <span className="text-sky-300 font-bold">{localIntegrations.facebookPage.accessToken.length}</span>
+            </span>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-sky-950/60">
+            <button 
+              onClick={handleTestFacebook} 
+              disabled={isVerifying.facebookPage}
+              className="px-3 py-1.5 rounded-xl bg-[#071738] hover:bg-[#0b2150] border border-sky-500/40 text-sky-200 hover:text-white text-xs font-extrabold flex items-center gap-1.5 transition-all disabled:opacity-50"
+            >
+              {isVerifying.facebookPage ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current text-sky-400" />}
+              <span>Test</span>
             </button>
-            <button onClick={() => handleSaveField('facebookPage', localIntegrations.facebookPage)} className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 text-white text-xs font-extrabold flex items-center gap-1.5">
-                <Check className="w-3.5 h-3.5 stroke-[3]" />
-                <span>Save</span>
+            <button 
+              onClick={() => handleSaveField('facebookPage', localIntegrations.facebookPage)} 
+              disabled={isVerifying.facebookPage}
+              className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 hover:from-blue-500 hover:to-sky-400 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-[0_0_12px_rgba(56,189,248,0.3)] transition-all disabled:opacity-50"
+            >
+              <Check className="w-3.5 h-3.5 stroke-[3]" />
+              <span>Save</span>
             </button>
           </div>
         </div>

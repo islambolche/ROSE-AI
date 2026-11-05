@@ -14,6 +14,9 @@ import {
   Download,
   CheckCircle2,
   XCircle,
+  Youtube,
+  Facebook,
+  ExternalLink,
 } from 'lucide-react';
 import { IDENTITY_AGENTS_MAP } from '../config/identity';
 
@@ -403,6 +406,33 @@ export const ChatBox: React.FC<ChatBoxProps> = ({
                           )}
                         </div>
                       )}
+                    </div>
+                  )}
+
+                  {msg.actionCommand && (
+                    <div className="mt-3 p-3 rounded-xl bg-black/30 border border-white/10 space-y-2.5">
+                      <div className="flex items-center gap-2.5">
+                        <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                          msg.actionCommand.type.includes('youtube') ? 'bg-rose-500/20 text-rose-400' : 'bg-blue-500/20 text-blue-400'
+                        }`}>
+                          {msg.actionCommand.type.includes('youtube') ? <Youtube className="w-5 h-5" /> : <Facebook className="w-5 h-5" />}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-bold text-white truncate capitalize">
+                            {msg.actionCommand.type.replace('_', ' ')}
+                          </p>
+                          <p className="text-[10px] text-slate-400 truncate">"{msg.actionCommand.query}"</p>
+                        </div>
+                      </div>
+                      <a 
+                        href={msg.actionCommand.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-full py-2 rounded-lg bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 text-sky-300 text-[10px] font-extrabold transition-all flex items-center justify-center gap-1.5 shadow-sm"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        Open Link
+                      </a>
                     </div>
                   )}
 
