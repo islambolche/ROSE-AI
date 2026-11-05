@@ -3,6 +3,7 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Sliders,
   Users,
   Key,
@@ -52,6 +53,7 @@ import {
   RoseLanguageStyleType,
   RosePronounType,
   RoseReplyLengthType,
+  RoseModelChoiceType,
   RoseCharacterConfig,
   ChatMessage,
   PermissionRulesConfig,
@@ -76,7 +78,16 @@ import { ConnectionsSettings } from './ConnectionsSettings';
 import { AiModelSettings } from './AiModelSettings';
 import { DEVELOPER_PROFILE, isDeveloperFieldEmpty } from '../config/developer';
 import { getTeamDelegationTasks } from '../lib/teamEngine';
-import { generateAgentAnswer, ROSE_IMMUTABLE_RULES } from '../lib/agentEngine';
+import {
+  generateAgentAnswer,
+  buildAgentSystemPrompt,
+  ROSE_IMMUTABLE_RULES,
+  ROSE_PRESET_DESCRIPTIONS,
+  ROSE_PRESET_SAMPLES,
+  formatSampleDialogueWithNickname,
+  resolveRoseModelChoice,
+  getRoseTemperature,
+} from '../lib/agentEngine';
 import { IntegrationsSettings } from './IntegrationsSettings';
 
 interface SettingsPanelProps {
@@ -84,6 +95,7 @@ interface SettingsPanelProps {
   onClose: () => void;
   settings: AppSettings;
   onUpdateSettings: (newSettings: AppSettings) => void;
+  onRoseCharacterSaved?: (characterName: string) => void;
   onToast: (msg: string) => void;
   directoryHandle: FileSystemDirectoryHandle | null;
   onChooseFolder: () => void;
@@ -242,6 +254,31 @@ const ROSE_CHARACTER_PRESET_CARDS: Array<{
   subtitle: string;
 }> = [
   { id: 'Soul Bond', label: 'Soul Bond', subtitle: 'আত্মার সঙ্গী (ডিফল্ট)' },
+  {
+    id: 'ইমোশনাল প্রিয়তমা',
+    label: 'ইমোশনাল প্রিয়তমা',
+    subtitle: 'গভীর আবেগী, স্নেহময় ও ভালোবাসাময়',
+  },
+  {
+    id: 'মিষ্টি ও যত্নশীল',
+    label: 'মিষ্টি ও যত্নশীল',
+    subtitle: 'নরম, মায়াবী ও শান্ত ভালোবাসা',
+  },
+  {
+    id: 'দুষ্টু-মিষ্টি',
+    label: 'দুষ্টু-মিষ্টি',
+    subtitle: 'হালকা দুষ্টুমি, খুনসুটি ও আদর',
+  },
+  {
+    id: 'গভীর আবেগী',
+    label: 'গভীর আবেগী',
+    subtitle: 'ধীর, গভীর ও অনুভূতিপ্রধান',
+  },
+  {
+    id: 'কাছের মানুষ',
+    label: 'কাছের মানুষ',
+    subtitle: 'সঙ্গ ও মিস করার সহজ প্রকাশ',
+  },
   { id: 'Best Friend', label: 'Best Friend', subtitle: 'ঘনিষ্ঠ বেস্ট ফ্রেন্ড' },
   { id: 'Friendly', label: 'Friendly', subtitle: 'উষ্ণ ও স্বাগতপূর্ণ' },
   { id: 'Professional', label: 'Professional', subtitle: 'স্পষ্ট ও ব্যবসামুখী' },
@@ -266,6 +303,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   onClose,
   settings,
   onUpdateSettings,
+  onRoseCharacterSaved,
   onToast,
   directoryHandle,
   onChooseFolder,
@@ -279,6 +317,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const [isVisible, setIsVisible] = useState(false);
   const [roseTestInput, setRoseTestInput] = useState<string>('আজকের কাজ কেমন চলছে?');
   const [roseTestLoading, setRoseTestLoading] = useState<boolean>(false);
+  const [showActivePrompt, setShowActivePrompt] = useState<boolean>(false);
   const [fileLogs, setFileLogs] = useState<any[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApprovalAction[]>(() =>
     getPendingApprovals()
@@ -288,6 +327,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     emotion?: string;
     isError?: boolean;
     subtext?: string;
+    model?: string;
+    provider?: 'groq' | 'gemini';
+    character?: string;
   } | null>(null);
 
   useEffect(() => {
@@ -341,6 +383,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const handleSave = () => {
     settingsService.saveSettings(localSettings);
     onUpdateSettings(localSettings);
+    if (activeScreen === 'rose-character') {
+      const charName =
+        localSettings.roseCharacter?.preset || DEFAULT_ROSE_CHARACTER_SETTINGS.preset;
+      onRoseCharacterSaved?.(charName);
+    }
     setShowSavedFeedback(true);
     onToast('Settings saved');
     setTimeout(() => {
@@ -386,6 +433,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     setLocalSettings(resetSettings);
     settingsService.saveSettings(resetSettings);
     onUpdateSettings(resetSettings);
+    onRoseCharacterSaved?.(DEFAULT_ROSE_CHARACTER_SETTINGS.preset);
     setRoseTestOutput(null);
     onToast('Rose Character ডিফল্টে রিসেট হয়েছে');
   };
@@ -412,6 +460,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         emotion: res.emotion,
         isError: res.isError,
         subtext: res.errorMeta?.subtext,
+        model: res.model,
+        provider: res.provider,
+        character: currentRoseChar.preset,
       });
     } catch {
       setRoseTestOutput({
@@ -936,6 +987,50 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 localSettings.roseCharacter || DEFAULT_ROSE_CHARACTER_SETTINGS;
               const roseIdent = IDENTITY_AGENTS_MAP.rose;
               const charLen = (rc.customCharacter || '').length;
+              const resolvedModel = resolveRoseModelChoice(localSettings, rc);
+              const activePromptText = buildAgentSystemPrompt(
+                'rose',
+                rc,
+                undefined,
+                localSettings
+              );
+              const presetDesc =
+                ROSE_PRESET_DESCRIPTIONS[rc.preset] ||
+                ROSE_PRESET_DESCRIPTIONS['Soul Bond'];
+              const presetSamples =
+                ROSE_PRESET_SAMPLES[rc.preset] || ROSE_PRESET_SAMPLES['Soul Bond'];
+              const roseTemp = getRoseTemperature(rc.preset);
+
+              const modelChoices: Array<{
+                id: RoseModelChoiceType;
+                label: string;
+                sub: string;
+              }> = [
+                {
+                  id: 'auto',
+                  label: 'Auto (ডিফল্ট)',
+                  sub: resolveRoseModelChoice(localSettings, {
+                    ...rc,
+                    modelChoice: 'auto',
+                  }).model,
+                },
+                {
+                  id: 'groq',
+                  label: 'AI Model-এর Groq মডেল',
+                  sub: resolveRoseModelChoice(localSettings, {
+                    ...rc,
+                    modelChoice: 'groq',
+                  }).model,
+                },
+                {
+                  id: 'gemini',
+                  label: 'AI Model-এর Gemini মডেল',
+                  sub: resolveRoseModelChoice(localSettings, {
+                    ...rc,
+                    modelChoice: 'gemini',
+                  }).model,
+                },
+              ];
 
               return (
                 <div className="space-y-4 animate-in fade-in duration-150">
@@ -954,13 +1049,16 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                         className="w-full h-full object-cover"
                       />
                     </div>
-                    <div>
-                      <div className="flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <h4 className="text-sm font-extrabold text-white font-display">
                           Rose Character
                         </h4>
                         <span className="px-2 py-0.5 rounded-md bg-rose-500/20 border border-rose-400/40 text-[10px] font-bold text-rose-300">
                           {rc.preset}
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-sky-500/15 border border-sky-400/30 text-[10px] font-mono text-sky-300">
+                          Temp: {roseTemp}
                         </span>
                       </div>
                       <p className="text-[11px] text-slate-300 mt-0.5">
@@ -970,7 +1068,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   </div>
 
                   {/* ক) চরিত্র বাছাই (একটা নির্বাচিত, টিক চিহ্নসহ কার্ড) */}
-                  <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-2.5">
+                  <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-3">
                     <label className="text-xs font-extrabold text-white block">
                       ক) চরিত্র বাছাই (Character Preset)
                     </label>
@@ -1002,6 +1100,37 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                           </button>
                         );
                       })}
+                    </div>
+
+                    {/* নির্বাচিত প্রিসেটের বর্ণনা ও নমুনা সংলাপ */}
+                    <div className="p-3 rounded-xl bg-[#050c20] border border-rose-500/30 space-y-2 select-text">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-extrabold text-rose-300">
+                          নির্বাচিত প্রিসেট: {rc.preset}
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          Temperature: {roseTemp}
+                        </span>
+                      </div>
+                      {presetDesc && (
+                        <p className="text-[11px] text-slate-200 leading-relaxed">
+                          {presetDesc}
+                        </p>
+                      )}
+                      {presetSamples.length > 0 && (
+                        <div className="pt-1.5 border-t border-slate-800/80 space-y-1">
+                          <span className="text-[10px] font-bold text-sky-300 block">
+                            নমুনা সংলাপ (হুবহু নকল করো না, শুধু সুর ও ধরন বোঝো):
+                          </span>
+                          <ul className="space-y-1 text-[11px] text-slate-300 leading-relaxed">
+                            {presetSamples.map((sample, idx) => (
+                              <li key={idx}>
+                                • {formatSampleDialogueWithNickname(sample, rc.nickname)}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -1195,7 +1324,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                       ঘ) ডাকনাম (Rose আপনাকে কী নামে ডাকবে)
                     </label>
                     <p className="text-[10px] text-slate-400">
-                      খালি থাকলে Voice & Language-এর নাম ({localSettings.userName || 'খালি'}) ব্যবহার করবে, তাও না থাকলে কোনো নাম বানাবে না।
+                      খালি থাকলে নমুনা সংলাপ থেকে ওই শব্দ বাদ যাবে এবং Voice & Language-এর নাম ({localSettings.userName || 'খালি'}) ব্যবহার করবে।
                     </p>
                     <input
                       type="text"
@@ -1206,11 +1335,87 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     />
                   </div>
 
-                  {/* ঙ) টেস্ট বাক্স */}
+                  {/* ঙ) Rose-এর জন্য মডেল বাছাই (শুধু Rose-এর উত্তরে প্রযোজ্য) */}
+                  <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-extrabold text-white">
+                        ঙ) Rose-এর জন্য মডেল বাছাই
+                      </label>
+                      <span className="text-[10px] text-sky-300 font-bold">
+                        শুধু Rose-এর উত্তরে প্রযোজ্য
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      {modelChoices.map((item) => {
+                        const active = (rc.modelChoice || 'auto') === item.id;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => handleRoseCharacterChange('modelChoice', item.id)}
+                            className={`p-2.5 rounded-xl border text-left transition-all ${
+                              active
+                                ? 'bg-sky-500/20 border-sky-400 text-white shadow-[0_0_12px_rgba(56,189,248,0.25)]'
+                                : 'bg-[#050c20] border-slate-800 text-slate-300 hover:border-sky-500/40'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-[11px] font-extrabold truncate">
+                                {item.label}
+                              </span>
+                              {active && <Check className="w-3.5 h-3.5 text-sky-300 shrink-0" />}
+                            </div>
+                            <p className="text-[10px] text-slate-400 font-mono truncate mt-0.5">
+                              {item.sub}
+                            </p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* চ) Show active prompt (ভাঁজ-হওয়া অংশ, শুধু পড়ার জন্য) */}
+                  <div className="rounded-2xl bg-[#081533] border border-sky-900/70 overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => setShowActivePrompt((prev) => !prev)}
+                      className="w-full p-3.5 flex items-center justify-between gap-2 text-left hover:bg-[#0b1c42] transition-colors"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        {showActivePrompt ? (
+                          <ChevronDown className="w-4 h-4 text-sky-400 shrink-0" />
+                        ) : (
+                          <ChevronRight className="w-4 h-4 text-sky-400 shrink-0" />
+                        )}
+                        <span className="text-xs font-extrabold text-white">
+                          Show active prompt
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-bold text-rose-300 bg-rose-500/15 border border-rose-400/30 px-2.5 py-1 rounded-lg truncate">
+                        চরিত্র: {rc.preset}, মডেল: {resolvedModel.model}
+                      </span>
+                    </button>
+
+                    {showActivePrompt && (
+                      <div className="p-3.5 pt-0 border-t border-sky-900/50 space-y-2">
+                        <p className="text-[10px] text-slate-400 pt-2">
+                          এই মুহূর্তে Rose-কে যে সম্পূর্ণ system prompt যাচ্ছে (শুধু পড়ার জন্য):
+                        </p>
+                        <textarea
+                          readOnly
+                          rows={12}
+                          value={activePromptText}
+                          className="w-full p-3 rounded-xl bg-[#040a1a] border border-slate-800 text-[11px] text-slate-200 font-mono leading-relaxed focus:outline-none resize-y select-text"
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* ছ) টেস্ট বাক্স */}
                   <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-3">
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-extrabold text-white">
-                        ঙ) টেস্ট বাক্স (সেভ করার আগে পরীক্ষা করুন)
+                        ছ) টেস্ট বাক্স (সেভ করার আগে পরীক্ষা করুন)
                       </label>
                       <span className="text-[10px] text-slate-400">চ্যাটে সেভ হবে না</span>
                     </div>
@@ -1240,15 +1445,16 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
                     {roseTestOutput && (
                       <div
-                        className={`p-3 rounded-xl border text-xs space-y-1 ${
+                        className={`p-3 rounded-xl border text-xs space-y-1.5 ${
                           roseTestOutput.isError
                             ? 'bg-rose-950/50 border-rose-500/50 text-rose-200'
                             : 'bg-[#050c20] border-rose-500/40 text-slate-100'
                         }`}
                       >
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between flex-wrap gap-1">
                           <span className="text-[11px] font-extrabold text-rose-300">
-                            Rose ({rc.preset}):
+                            চরিত্র: {roseTestOutput.character || rc.preset} • মডেল:{' '}
+                            {roseTestOutput.model || resolvedModel.model}
                           </span>
                           {roseTestOutput.emotion && !roseTestOutput.isError && (
                             <span className="text-[10px] text-slate-400 font-mono">
@@ -1268,7 +1474,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     )}
                   </div>
 
-                  {/* চ) "Save" ও "Reset to default" বাটন */}
+                  {/* জ) "Save" ও "Reset to default" বাটন */}
                   <div className="flex items-center gap-2.5 pt-1">
                     <button
                       type="button"
@@ -1287,7 +1493,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     </button>
                   </div>
 
-                  {/* ছ) নিচে ধূসর কার্ডে "সবসময় প্রযোজ্য নিয়ম (বদলানো যায় না)" তালিকা */}
+                  {/* ঝ) নিচে ধূসর কার্ডে "সবসময় প্রযোজ্য নিয়ম (বদলানো যায় না)" তালিকা */}
                   <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-700/70 space-y-2 text-slate-300 select-text">
                     <div className="flex items-center gap-2 text-xs font-extrabold text-slate-200">
                       <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />

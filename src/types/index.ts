@@ -22,13 +22,21 @@ export interface Agent {
 export type DelegationMode = 'ask' | 'handoff';
 
 export interface TeamMessageMeta {
-  kind: 'delegation' | 'report' | 'rose_task' | 'ask_fold' | 'handoff_reply' | 'save_file';
+  kind:
+    | 'delegation'
+    | 'report'
+    | 'rose_task'
+    | 'ask_fold'
+    | 'handoff_reply'
+    | 'save_file'
+    | 'character_divider';
   mode?: DelegationMode;
   targetAgentId?: AgentId;
   reportAgentId?: AgentId;
   taskText?: string;
   reportText?: string;
   isError?: boolean;
+  characterName?: string;
 }
 
 export type OfficeAgentPhase =
@@ -168,6 +176,11 @@ export interface AgentSettingsConfig {
 
 export type RoseCharacterPresetType =
   | 'Soul Bond'
+  | 'ইমোশনাল প্রিয়তমা'
+  | 'মিষ্টি ও যত্নশীল'
+  | 'দুষ্টু-মিষ্টি'
+  | 'গভীর আবেগী'
+  | 'কাছের মানুষ'
   | 'Best Friend'
   | 'Friendly'
   | 'Professional'
@@ -179,6 +192,7 @@ export type RoseCharacterPresetType =
 export type RoseLanguageStyleType = 'শুদ্ধ বাংলা' | 'কথ্য বাংলা' | 'বাংলা-ইংরেজি মিশ্র';
 export type RosePronounType = 'তুমি' | 'আপনি' | 'তুই';
 export type RoseReplyLengthType = 'ছোট' | 'মাঝারি';
+export type RoseModelChoiceType = 'auto' | 'groq' | 'gemini';
 
 export interface RoseCharacterConfig {
   preset: RoseCharacterPresetType; // default 'Soul Bond'
@@ -190,6 +204,7 @@ export interface RoseCharacterConfig {
   replyLength: RoseReplyLengthType; // 'ছোট' | 'মাঝারি', default 'ছোট'
   useEmoji: boolean; // default false
   nickname: string; // default ''
+  modelChoice?: RoseModelChoiceType; // default 'auto'
 }
 
 export interface ApiConnections {

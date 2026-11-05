@@ -434,10 +434,14 @@ export async function handleRoseTeamTurn(
   // MODE 1: HANDOFF (এজেন্ট নিজে সরাসরি দেবে, ক্রমে একজন শেষ করলে পরের জন)
   // ============================================================================
   if (turnMode === 'handoff') {
-    // Rose শুধু একটা ছোট বাক্য বলবে ("ঠিক আছে, মিরাকে বলছি।")। কোনো তথ্য, সারাংশ, অনুমান বা মন্তব্য যোগ করবে না।
-    const shortHandoffSentence = buildRoseHandoffShortSentence(targetIds);
+    // Rose শুধু একটা ছোট বাক্য বলবে (নিজের চরিত্রের সুরে থাকলে সেটি, নাহলে ডিফল্ট বাক্য)। কোনো তথ্য, সারাংশ, অনুমান বা মন্তব্য যোগ করবে না।
+    const trimmedIntro = (introText || '').trim();
+    const shortHandoffSentence =
+      trimmedIntro && trimmedIntro.length <= 160
+        ? trimmedIntro
+        : buildRoseHandoffShortSentence(targetIds);
     if (callbacks?.onRoseIntro) {
-      callbacks.onRoseIntro(shortHandoffSentence, 'warm');
+      callbacks.onRoseIntro(shortHandoffSentence, firstStepResult.emotion || 'warm');
     }
 
     let lastReplyText = '';
@@ -576,8 +580,8 @@ export async function handleRoseTeamTurn(
     .map((r) => `${r.agentName} (${r.agentId})-এর অভ্যন্তরীণ রিপোর্ট: ${r.reportText}`)
     .join('\n');
 
-  // তারপর শুধু Rose ব্যবহারকারীকে ১-৩ বাক্যে বাংলায় উত্তর দেবে
-  const summaryInstruction = `তুমি ভেতরে টিমের কাছ থেকে তথ্য নিয়েছ। নিচের রিপোর্টগুলো থেকে ব্যবহারকারীকে ১-৩ বাক্যে বাংলায় সরাসরি তোমার উত্তর দাও। রিপোর্টে যা নেই তা বানাবে না। ডেটা সংযুক্ত নেই বললে সেটা সৎভাবে জানাও। কোনো <<ASK>> বা <<HANDOFF>> লাইন লিখবে না।`;
+  // তারপর শুধু Rose নিজের নির্বাচিত চরিত্রের সুর ও আবেগ বজায় রেখে ব্যবহারকারীকে উত্তর দেবে
+  const summaryInstruction = `তুমি ভেতরে টিমের কাছ থেকে তথ্য নিয়েছ। নিচের রিপোর্টগুলো থেকে ব্যবহারকারীকে বাংলায় তোমার নির্বাচিত চরিত্রের সুর ও আবেগ বজায় রেখে সরাসরি উত্তর দাও। রিপোর্টে যা নেই তা বানাবে না। ডেটা সংযুক্ত নেই বললে সেটা সৎভাবে জানাও। কোনো <<ASK>> বা <<HANDOFF>> লাইন লিখবে না।`;
 
   const summaryHistory: ChatMessage[] = [
     ...history,
@@ -585,7 +589,7 @@ export async function handleRoseTeamTurn(
       id: `rep_bundle_${Date.now()}`,
       sender: 'user',
       senderName: 'Internal Team Reports',
-      text: `ব্যবহারকারীর মেসেজ ছিল: "${lastUserMessage}"\n\nটিমের অভ্যন্তরীণ রিপোর্ট:\n${formattedReportsText}\n\nএখন শুধু তুমি (Rose) ব্যবহারকারীকে ১-৩ বাক্যে বাংলায় উত্তর দাও।`,
+      text: `ব্যবহারকারীর মেসেজ ছিল: "${lastUserMessage}"\n\nটিমের অভ্যন্তরীণ রিপোর্ট:\n${formattedReportsText}\n\nএখন শুধু তুমি (Rose) তোমার বর্তমান চরিত্রের সুর ও আবেগ বজায় রেখে ব্যবহারকারীকে বাংলায় উত্তর দাও।`,
       timestamp: new Date().toLocaleTimeString([], {
         hour: '2-digit',
         minute: '2-digit',

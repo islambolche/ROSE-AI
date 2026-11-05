@@ -149,6 +149,9 @@ app.post('/api/gemini/generate', async (req: Request, res: Response) => {
     if (generationConfig?.maxOutputTokens) {
       config.maxOutputTokens = generationConfig.maxOutputTokens;
     }
+    if (typeof generationConfig?.temperature === 'number') {
+      config.temperature = generationConfig.temperature;
+    }
 
     let targetModel = model || 'gemini-3.8-flash';
     if (targetModel.includes('3.5') || !targetModel.startsWith('gemini-')) {

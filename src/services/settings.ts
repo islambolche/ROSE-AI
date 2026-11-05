@@ -21,6 +21,11 @@ const VALID_ADDRESS_AS: UserAddressAsType[] = ['শুধু নাম', 'ভা
 
 const VALID_ROSE_PRESETS: RoseCharacterPresetType[] = [
   'Soul Bond',
+  'ইমোশনাল প্রিয়তমা',
+  'মিষ্টি ও যত্নশীল',
+  'দুষ্টু-মিষ্টি',
+  'গভীর আবেগী',
+  'কাছের মানুষ',
   'Best Friend',
   'Friendly',
   'Professional',
@@ -50,6 +55,7 @@ export const DEFAULT_ROSE_CHARACTER_SETTINGS: RoseCharacterConfig = {
   replyLength: 'ছোট',
   useEmoji: false,
   nickname: '',
+  modelChoice: 'auto',
 };
 
 export const DEFAULT_AGENTS_SETTINGS: Record<AgentId, AgentSettingsConfig> = {
@@ -236,6 +242,11 @@ export const settingsService = {
         ? rawRC.replyLength
         : DEFAULT_ROSE_CHARACTER_SETTINGS.replyLength;
 
+      const validModelChoice =
+        rawRC.modelChoice === 'groq' || rawRC.modelChoice === 'gemini'
+          ? rawRC.modelChoice
+          : 'auto';
+
       const roseCharacter: RoseCharacterConfig = {
         preset: validPreset,
         customCharacter:
@@ -255,6 +266,7 @@ export const settingsService = {
         replyLength: validReplyLen,
         useEmoji: Boolean(rawRC.useEmoji),
         nickname: typeof rawRC.nickname === 'string' ? rawRC.nickname : '',
+        modelChoice: validModelChoice,
       };
 
       // Migration for old hardcoded models

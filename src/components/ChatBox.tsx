@@ -186,6 +186,25 @@ export const ChatBox: React.FC<ChatBoxProps> = ({
         )}
 
         {filteredMessages.map((msg) => {
+          // 0) Character change divider in Rose's chat: "চরিত্র বদলেছে: <নাম>"
+          if (
+            msg.teamMeta?.kind === 'character_divider' ||
+            (typeof msg.text === 'string' && msg.text.startsWith('চরিত্র বদলেছে:'))
+          ) {
+            return (
+              <div
+                key={msg.id}
+                className="flex items-center gap-3 my-2 px-2 animate-in fade-in duration-150 select-text"
+              >
+                <div className="flex-1 h-px bg-rose-500/30" />
+                <span className="px-2.5 py-0.5 rounded-full bg-rose-500/15 border border-rose-500/30 text-[10px] font-bold text-rose-300 tracking-wide">
+                  {msg.text}
+                </span>
+                <div className="flex-1 h-px bg-rose-500/30" />
+              </div>
+            );
+          }
+
           // 1) Delegation line in Rose's chat: "Rose → Mira: <কাজ>"
           if (msg.teamMeta?.kind === 'delegation') {
             return (

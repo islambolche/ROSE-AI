@@ -2569,6 +2569,29 @@ export default function App() {
         onClose={() => setIsSettingsOpen(false)}
         settings={settings}
         onUpdateSettings={setSettings}
+        onRoseCharacterSaved={(charName) => {
+          const dividerText = `চরিত্র বদলেছে: ${charName}`;
+          const rec = dbService.addMessage({
+            agent_id: 'rose',
+            role: 'agent',
+            content: dividerText,
+            device: 'pc',
+            is_system: true,
+            team_meta: {
+              kind: 'character_divider',
+              characterName: charName,
+            },
+          });
+          if (selectedAgentId === 'rose') {
+            setMessages((prev) => [
+              ...prev,
+              {
+                ...formatRecordToChatMessage(rec),
+                isSystem: true,
+              },
+            ]);
+          }
+        }}
         onToast={showToast}
         directoryHandle={directoryHandle}
         onChooseFolder={handleChooseFolder}
