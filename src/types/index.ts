@@ -237,6 +237,27 @@ export interface PcControlConfig {
   workFolderName?: string;
 }
 
+export interface WhatsAppConfig {
+  accessToken: string;
+  phoneNumberId: string;
+}
+
+export interface GoogleAuthConfig {
+  accessToken: string;
+  refreshToken: string;
+  expiryDate: number;
+}
+
+export interface IntegrationsConfig {
+  pcAccess: boolean;
+  whatsapp: WhatsAppConfig;
+  youtube: GoogleAuthConfig;
+  facebookPage: string; // Page access token
+  tiktok: string; // Access token
+  gmail: GoogleAuthConfig;
+  askBeforeAction: boolean; // default true
+}
+
 export interface AppSettings {
   userName: string; // default ''
   userAddressAs: UserAddressAsType; // default 'শুধু নাম'
@@ -251,6 +272,7 @@ export interface AppSettings {
   voiceSettings: VoiceSettingsConfig;
   pcControl: PcControlConfig;
   voiceCaptions: boolean; // default false
+  integrations: IntegrationsConfig;
 }
 
 

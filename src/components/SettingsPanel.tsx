@@ -69,6 +69,7 @@ import { AiModelSettings } from './AiModelSettings';
 import { DEVELOPER_PROFILE, isDeveloperFieldEmpty } from '../config/developer';
 import { getTeamDelegationTasks } from '../lib/teamEngine';
 import { generateAgentAnswer, ROSE_IMMUTABLE_RULES } from '../lib/agentEngine';
+import { IntegrationsSettings } from './IntegrationsSettings';
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -182,9 +183,9 @@ const SETTINGS_MENU_ITEMS: MenuItem[] = [
   },
   {
     id: 'integrations',
-    title: 'Integrations',
-    desc: 'Facebook, YouTube, Browser',
-    icon: Share2,
+    title: 'Integrations & Access',
+    desc: 'Third-party services & access control',
+    icon: Link,
   },
   {
     id: 'approvals',
@@ -2063,6 +2064,26 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           )}
 
           {/* ========================================================= */}
+          {/* INTEGRATIONS & ACCESS SUB-SCREEN                          */}
+          {/* ========================================================= */}
+          {activeScreen === 'integrations' && (
+            <IntegrationsSettings
+              integrations={localSettings.integrations}
+              geminiKey={localSettings.connections.geminiKey}
+              onSaveIntegrations={(newIntegrations) => {
+                const updated: AppSettings = {
+                  ...localSettings,
+                  integrations: newIntegrations,
+                };
+                setLocalSettings(updated);
+                settingsService.saveSettings(updated);
+                onUpdateSettings(updated);
+              }}
+              onToast={onToast}
+            />
+          )}
+
+          {/* ========================================================= */}
           {/* 5. ALL OTHER SUB-SCREENS: "শীঘ্রই আসছে" (Coming Soon)        */}
           {/* ========================================================= */}
           {activeScreen &&
@@ -2077,6 +2098,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             activeScreen !== 'pc-control' &&
             activeScreen !== 'security-privacy' &&
             activeScreen !== 'approvals' &&
+            activeScreen !== 'integrations' &&
             activeScreen !== 'developer' && (
               <div className="py-14 px-6 flex flex-col items-center justify-center text-center space-y-4 rounded-3xl bg-[#081533]/60 border border-sky-900/60 animate-in fade-in duration-200">
                 <div className="w-14 h-14 rounded-2xl bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-sky-400 shadow-[0_0_20px_rgba(56,189,248,0.25)]">

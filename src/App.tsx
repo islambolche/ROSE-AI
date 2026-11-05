@@ -372,6 +372,18 @@ export default function App() {
       return;
     }
 
+    // Ask before every action (ON by default)
+    if (settings.integrations.askBeforeAction) {
+      const confirmed = window.confirm('আপনি কি নিশ্চিত যে আপনি এটি করতে চান? (Confirm Action)');
+      if (!confirmed) {
+        showToast('কাজটি বাতিল করা হয়েছে');
+        if (options?.fromVoice && voiceChat.isMicActive()) {
+          voiceChat.resumeRecognitionAfterSpeaking();
+        }
+        return;
+      }
+    }
+
     // 1. Immediately store and display user message
     const userRecord = dbService.addMessage({
       agent_id: selectedAgentId,

@@ -17,9 +17,11 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
 app.use(express.json({ limit: '10mb' }));
 
-// Helper to obtain a GoogleGenAI instance with 'aistudio-build' telemetry header
+// Helper to obtain a GoogleGenAI instance with 'aistudio-build' telemetry header.
+// This is called at request time to ensure the user's latest saved key is used.
+// It no longer falls back to environment variables.
 function getGeminiClient(customApiKey?: string): { client: GoogleGenAI; keyUsed: boolean } {
-  const key = (customApiKey || '').trim() || process.env.GEMINI_API_KEY || '';
+  const key = (customApiKey || '').trim();
   if (!key) {
     return { client: null as any, keyUsed: false };
   }
@@ -51,7 +53,6 @@ app.post('/api/gemini/validate', async (req: Request, res: Response) => {
 
   try {
     // Correct method according to @google/genai SDK is generateContent
-    // Use a minimal prompt to verify the key works
     await client.models.generateContent({
       model: 'gemini-3.8-flash',
       contents: [{ role: 'user', parts: [{ text: 'Hello' }] }],
@@ -66,7 +67,6 @@ app.post('/api/gemini/validate', async (req: Request, res: Response) => {
     const status = err?.status || err?.statusCode || 500;
     const msg = String(err?.message || '');
     
-    // Check for common error codes but pass through the message
     if (status === 401 || status === 403 || msg.includes('API_KEY_INVALID') || msg.includes('PERMISSION_DENIED')) {
       return res.status(status).json({
         ok: false,
@@ -107,7 +107,7 @@ app.post('/api/gemini/generate', async (req: Request, res: Response) => {
 
   if (!keyUsed || !client) {
     return res.status(401).json({
-      error: 'No API key available. Configure GEMINI_API_KEY in server secrets or Connections.',
+      error: 'API key missing. Please connect your Gemini key in Connections settings.',
       status: 401,
     });
   }
@@ -118,7 +118,6 @@ app.post('/api/gemini/generate', async (req: Request, res: Response) => {
       formattedContents = [{ role: 'user', parts: [{ text: prompt }] }];
     }
 
-    // Ensure alternating user/model turns and no empty parts
     if (Array.isArray(formattedContents)) {
       const sanitized: any[] = [];
       for (const item of formattedContents) {
@@ -151,7 +150,6 @@ app.post('/api/gemini/generate', async (req: Request, res: Response) => {
       config.maxOutputTokens = generationConfig.maxOutputTokens;
     }
 
-    // Ensure valid model ID: gemini-3.5-flash -> gemini-3.8-flash
     let targetModel = model || 'gemini-3.8-flash';
     if (targetModel.includes('3.5') || !targetModel.startsWith('gemini-')) {
       targetModel = 'gemini-3.8-flash';
@@ -214,7 +212,7 @@ app.post('/api/gemini/stream', async (req: Request, res: Response) => {
   const { client, keyUsed } = getGeminiClient(apiKey);
 
   if (!keyUsed || !client) {
-    return res.status(401).json({ error: 'No API key provided or configured' });
+    return res.status(401).json({ error: 'API key missing. Please connect your Gemini key in Connections settings.' });
   }
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -254,9 +252,12 @@ app.post('/api/gemini/stream', async (req: Request, res: Response) => {
 const wss = new WebSocketServer({ noServer: true });
 
 wss.on('connection', (clientWs: WebSocket, request: http.IncomingMessage) => {
-  const apiKey = process.env.GEMINI_API_KEY || '';
+  // Read key from query param: /api/gemini/live?key=...
+  const url = new URL(request.url || '', `http://${request.headers.host}`);
+  const apiKey = url.searchParams.get('key')?.trim() || '';
+
   if (!apiKey) {
-    clientWs.send(JSON.stringify({ error: 'No GEMINI_API_KEY configured for Live API' }));
+    clientWs.send(JSON.stringify({ error: 'No Gemini API key provided. Please connect in Connections settings.' }));
     clientWs.close();
     return;
   }
@@ -276,27 +277,27 @@ wss.on('connection', (clientWs: WebSocket, request: http.IncomingMessage) => {
     }
   });
 
-  geminiWs.on('message', (data) => {
-    if (clientWs.readyState === WebSocket.OPEN) {
-      clientWs.send(data);
-    }
-  });
-
-  clientWs.on('close', () => {
+  geminiWs.on('close', () => {
     if (geminiWs.readyState === WebSocket.OPEN) {
       geminiWs.close();
-    }
-  });
-
-  geminiWs.on('close', () => {
-    if (clientWs.readyState === WebSocket.OPEN) {
-      clientWs.close();
     }
   });
 
   geminiWs.on('error', (err) => {
     if (clientWs.readyState === WebSocket.OPEN) {
       clientWs.send(JSON.stringify({ error: err.message }));
+    }
+  });
+  
+  geminiWs.on('message', (data) => {
+    if (clientWs.readyState === WebSocket.OPEN) {
+      clientWs.send(data);
+    }
+  });
+  
+  clientWs.on('close', () => {
+    if (geminiWs.readyState === WebSocket.OPEN) {
+      geminiWs.close();
     }
   });
 });

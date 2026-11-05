@@ -665,8 +665,8 @@ export async function generateAgentAnswer(
     mod: string
   ): Promise<{ answer: string; modelUsed: string; finishReason: string | null }> => {
     const key = prov === 'groq' ? groqKey : geminiKey;
-    if (prov === 'groq' && !key) {
-      const err = new Error('Groq কী Connections-এ নেই');
+    if (!key) {
+      const err = new Error(`${prov === 'groq' ? 'Groq' : 'Gemini'} কী Connections-এ নেই`);
       (err as any).status = 401;
       throw err;
     }

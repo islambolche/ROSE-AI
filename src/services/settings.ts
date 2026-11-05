@@ -11,6 +11,7 @@ import {
   RosePronounType,
   RoseReplyLengthType,
   VoiceSettingsConfig,
+  IntegrationsConfig,
 } from '../types';
 
 const STORAGE_KEY = 'rose_ai_user_preferences_v2';
@@ -119,6 +120,16 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettingsConfig = {
   elevenLabsCharLimit: 300,
 };
 
+export const DEFAULT_INTEGRATIONS: IntegrationsConfig = {
+  pcAccess: false,
+  whatsapp: { accessToken: '', phoneNumberId: '' },
+  youtube: { accessToken: '', refreshToken: '', expiryDate: 0 },
+  facebookPage: '',
+  tiktok: '',
+  gmail: { accessToken: '', refreshToken: '', expiryDate: 0 },
+  askBeforeAction: true,
+};
+
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   userName: '',
   userAddressAs: 'শুধু নাম',
@@ -135,6 +146,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     allowFileSave: false,
   },
   voiceCaptions: false,
+  integrations: DEFAULT_INTEGRATIONS,
 };
 
 type SettingsListener = (settings: AppSettings) => void;
@@ -304,6 +316,22 @@ export const settingsService = {
           workFolderName: parsed.pcControl?.workFolderName || '',
         },
         voiceCaptions: parsed.voiceCaptions !== undefined ? Boolean(parsed.voiceCaptions) : false,
+        integrations: {
+          ...DEFAULT_INTEGRATIONS,
+          ...(parsed.integrations || {}),
+          whatsapp: {
+            ...DEFAULT_INTEGRATIONS.whatsapp,
+            ...(parsed.integrations?.whatsapp || {}),
+          },
+          youtube: {
+            ...DEFAULT_INTEGRATIONS.youtube,
+            ...(parsed.integrations?.youtube || {}),
+          },
+          gmail: {
+            ...DEFAULT_INTEGRATIONS.gmail,
+            ...(parsed.integrations?.gmail || {}),
+          },
+        },
       };
     } catch {
       return { ...DEFAULT_APP_SETTINGS };
