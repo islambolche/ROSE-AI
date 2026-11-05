@@ -49,12 +49,8 @@ import {
   ChatFontSizeType,
   AgentId,
   UserAddressAsType,
-  RosePrimaryModeId,
-  RoseCharacterPresetType,
+  RoseEmotionalWarmth,
   RoseCharacterTraits,
-  RoseLanguageStyleType,
-  RosePronounType,
-  RoseReplyLengthType,
   RoseModelChoiceType,
   RoseCharacterConfig,
   ChatMessage,
@@ -75,10 +71,8 @@ import {
   DEFAULT_APP_SETTINGS,
   DEFAULT_ROSE_CHARACTER_SETTINGS,
   DEFAULT_ROSE_TRAITS,
-  ROSE_MODE_DEFAULT_CONFIG,
-  MODE_TO_PRESET_LABEL,
-  mapPresetToPrimaryMode,
   sanitizeRoseCharacterConfig,
+  VALID_ROSE_EMOTIONAL_WARMTHS,
   DEFAULT_PERMISSION_RULES,
 } from '../services/settings';
 import { ConnectionsSettings } from './ConnectionsSettings';
@@ -89,13 +83,11 @@ import {
   generateAgentAnswer,
   buildAgentSystemPrompt,
   buildRoseSystemPrompt,
-  ROSE_PRIMARY_MODES,
+  ROSE_WARMTH_LEVELS,
+  ROSE_TRAIT_CATEGORIES,
   ROSE_TRAIT_DEFINITIONS,
   resolveRosePersonalityCombination,
   ROSE_IMMUTABLE_RULES,
-  ROSE_PRESET_DESCRIPTIONS,
-  ROSE_PRESET_SAMPLES,
-  formatSampleDialogueWithNickname,
   resolveRoseModelChoice,
   getRoseTemperature,
 } from '../lib/agentEngine';
@@ -259,56 +251,6 @@ const LANGUAGE_OPTIONS: LanguageType[] = [
   'Spanish',
 ];
 
-const ROSE_CHARACTER_PRESET_CARDS: Array<{
-  id: RoseCharacterPresetType;
-  label: string;
-  subtitle: string;
-}> = [
-  { id: 'Soul Bond', label: 'Soul Bond', subtitle: 'আত্মার সঙ্গী (ডিফল্ট)' },
-  {
-    id: 'ইমোশনাল প্রিয়তমা',
-    label: 'ইমোশনাল প্রিয়তমা',
-    subtitle: 'গভীর আবেগী, স্নেহময় ও ভালোবাসাময়',
-  },
-  {
-    id: 'মিষ্টি ও যত্নশীল',
-    label: 'মিষ্টি ও যত্নশীল',
-    subtitle: 'নরম, মায়াবী ও শান্ত ভালোবাসা',
-  },
-  {
-    id: 'দুষ্টু-মিষ্টি',
-    label: 'দুষ্টু-মিষ্টি',
-    subtitle: 'হালকা দুষ্টুমি, খুনসুটি ও আদর',
-  },
-  {
-    id: 'গভীর আবেগী',
-    label: 'গভীর আবেগী',
-    subtitle: 'ধীর, গভীর ও অনুভূতিপ্রধান',
-  },
-  {
-    id: 'কাছের মানুষ',
-    label: 'কাছের মানুষ',
-    subtitle: 'সঙ্গ ও মিস করার সহজ প্রকাশ',
-  },
-  { id: 'Best Friend', label: 'Best Friend', subtitle: 'ঘনিষ্ঠ বেস্ট ফ্রেন্ড' },
-  { id: 'Friendly', label: 'Friendly', subtitle: 'উষ্ণ ও স্বাগতপূর্ণ' },
-  { id: 'Professional', label: 'Professional', subtitle: 'স্পষ্ট ও ব্যবসামুখী' },
-  { id: 'Funny', label: 'Funny', subtitle: 'রসিক ও হালকা মজার' },
-  { id: 'Teacher', label: 'Teacher', subtitle: 'ধৈর্যশীল ও ধাপে ধাপে' },
-  { id: 'GF Mode', label: 'GF Mode', subtitle: 'উষ্ণ, মিষ্টি ও সহায়ক' },
-  { id: 'Custom', label: 'Custom', subtitle: 'নিজের লেখা চরিত্র' },
-];
-
-const ROSE_LANGUAGE_STYLES: RoseLanguageStyleType[] = [
-  'শুদ্ধ বাংলা',
-  'কথ্য বাংলা',
-  'বাংলা-ইংরেজি মিশ্র',
-];
-
-const ROSE_PRONOUNS: RosePronounType[] = ['তুমি', 'আপনি', 'তুই'];
-
-const ROSE_REPLY_LENGTHS: RoseReplyLengthType[] = ['ছোট', 'মাঝারি'];
-
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   isOpen,
   onClose,
@@ -433,10 +375,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     setLocalSettings(syncedSettings);
     onUpdateSettings(syncedSettings);
     if (activeScreen === 'rose-character') {
-      const modeDef =
-        ROSE_PRIMARY_MODES[cleanRose.activeMode] ||
-        ROSE_PRIMARY_MODES.emotional_caring;
-      onRoseCharacterSaved?.(modeDef.name || cleanRose.preset);
+      onRoseCharacterSaved?.(cleanRose.emotionalWarmth);
     }
     setShowSavedFeedback(true);
     onToast('Settings saved');
@@ -475,70 +414,14 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       ...current,
       [field]: val,
     };
-
-    // Keep traits and fine-tuning sliders/buttons aligned when user adjusts speech controls
-    if (field === 'replyLength') {
-      updated.traits = {
-        ...(current.traits || DEFAULT_ROSE_TRAITS),
-        conciseResponses: val === 'ছোট',
-        detailedResponses: val === 'মাঝারি',
-      };
-    } else if (field === 'languageStyle') {
-      updated.traits = {
-        ...(current.traits || DEFAULT_ROSE_TRAITS),
-        formalLanguage: val === 'শুদ্ধ বাংলা',
-        casualBengaliLanguage: val === 'কথ্য বাংলা' || val === 'বাংলা-ইংরেজি মিশ্র',
-      };
-    } else if (field === 'emotionLevel') {
-      const numVal = Number(val);
-      updated.traits = {
-        ...(current.traits || DEFAULT_ROSE_TRAITS),
-        emotionalSensitivity: numVal >= 4,
-      };
-    } else if (field === 'humorLevel') {
-      const numVal = Number(val);
-      updated.traits = {
-        ...(current.traits || DEFAULT_ROSE_TRAITS),
-        humor: numVal >= 5,
-      };
-    }
-
     applyIsolatedRoseConfig(updated, false);
   };
 
-  const handleSelectRosePrimaryMode = (modeId: RosePrimaryModeId) => {
+  const handleSelectRoseEmotionalWarmth = (warmth: RoseEmotionalWarmth) => {
     const current = getIsolatedRoseConfig(localSettings);
-    const modeDefaults = ROSE_MODE_DEFAULT_CONFIG[modeId];
     const nextRose: RoseCharacterConfig = {
       ...current,
-      activeMode: modeId,
-      preset: MODE_TO_PRESET_LABEL[modeId] || current.preset,
-      languageStyle: modeDefaults.languageStyle,
-      pronoun: modeDefaults.pronoun,
-      emotionLevel: modeDefaults.emotionLevel,
-      humorLevel: modeDefaults.humorLevel,
-      replyLength: modeDefaults.replyLength,
-      useEmoji: modeDefaults.useEmoji,
-      traits: { ...modeDefaults.traits },
-    };
-    applyIsolatedRoseConfig(nextRose, true);
-  };
-
-  const handleSelectRoseBengaliPreset = (presetId: RoseCharacterPresetType) => {
-    const current = getIsolatedRoseConfig(localSettings);
-    const mappedMode = mapPresetToPrimaryMode(presetId);
-    const modeDefaults = ROSE_MODE_DEFAULT_CONFIG[mappedMode];
-    const nextRose: RoseCharacterConfig = {
-      ...current,
-      activeMode: mappedMode,
-      preset: presetId,
-      languageStyle: modeDefaults.languageStyle,
-      pronoun: modeDefaults.pronoun,
-      emotionLevel: modeDefaults.emotionLevel,
-      humorLevel: modeDefaults.humorLevel,
-      replyLength: modeDefaults.replyLength,
-      useEmoji: modeDefaults.useEmoji,
-      traits: { ...modeDefaults.traits },
+      emotionalWarmth: warmth,
     };
     applyIsolatedRoseConfig(nextRose, true);
   };
@@ -556,34 +439,6 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       ...current,
       traits: nextTraits,
     };
-
-    // Deterministic mutual-exclusion and slider synchronization
-    if (traitKey === 'conciseResponses' && nextVal) {
-      nextTraits.detailedResponses = false;
-      nextRose.replyLength = 'ছোট';
-    } else if (traitKey === 'detailedResponses' && nextVal) {
-      nextTraits.conciseResponses = false;
-      nextRose.replyLength = 'মাঝারি';
-    } else if (traitKey === 'formalLanguage' && nextVal) {
-      nextTraits.casualBengaliLanguage = false;
-      nextRose.languageStyle = 'শুদ্ধ বাংলা';
-      nextRose.pronoun = 'আপনি';
-    } else if (traitKey === 'casualBengaliLanguage' && nextVal) {
-      nextTraits.formalLanguage = false;
-      nextRose.languageStyle = 'কথ্য বাংলা';
-    } else if (traitKey === 'emotionalSensitivity') {
-      if (!nextVal && nextRose.emotionLevel > 3) {
-        nextRose.emotionLevel = 3;
-      } else if (nextVal && nextRose.emotionLevel < 5) {
-        nextRose.emotionLevel = 7;
-      }
-    } else if (traitKey === 'humor') {
-      if (!nextVal && nextRose.humorLevel > 3) {
-        nextRose.humorLevel = 2;
-      } else if (nextVal && nextRose.humorLevel < 5) {
-        nextRose.humorLevel = 6;
-      }
-    }
 
     applyIsolatedRoseConfig(nextRose, true);
   };
@@ -604,7 +459,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     settingsService.saveRoseCharacterSettings(resetRose);
     settingsService.saveSettings(resetSettings);
     onUpdateSettings(resetSettings);
-    onRoseCharacterSaved?.(DEFAULT_ROSE_CHARACTER_SETTINGS.preset);
+    onRoseCharacterSaved?.(resetRose.emotionalWarmth);
     setRoseTestOutput(null);
     onToast('Rose Character ডিফল্টে রিসেট হয়েছে');
   };
@@ -622,9 +477,6 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
       const currentRoseChar = getIsolatedRoseConfig(localSettings);
-      const activeModeDef =
-        ROSE_PRIMARY_MODES[currentRoseChar.activeMode] ||
-        ROSE_PRIMARY_MODES.emotional_caring;
       const res = await generateAgentAnswer('rose', [testMsg], {
         roseCharacterOverride: currentRoseChar,
       });
@@ -635,7 +487,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         subtext: res.errorMeta?.subtext,
         model: res.model,
         provider: res.provider,
-        character: `${activeModeDef.name} (${currentRoseChar.preset})`,
+        character: `Rose (${currentRoseChar.emotionalWarmth})`,
       });
     } catch {
       setRoseTestOutput({
@@ -647,13 +499,13 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     }
   };
 
-  const activeMenuItem = SETTINGS_MENU_ITEMS.find((item) => item.id === activeScreen);
   const currentRoseMenuSummary = (() => {
     const rc = getIsolatedRoseConfig(localSettings);
-    const modeDef =
-      ROSE_PRIMARY_MODES[rc.activeMode] || ROSE_PRIMARY_MODES.emotional_caring;
-    return `${modeDef.name} • ${rc.preset}`;
+    const combo = resolveRosePersonalityCombination(rc);
+    return `${combo.warmthMeta.label} (${combo.warmthMeta.bengaliLabel}) • ${combo.enabledTraitsCount} Traits ON`;
   })();
+
+  const activeMenuItem = SETTINGS_MENU_ITEMS.find((item) => item.id === activeScreen);
 
   return (
     <div
@@ -1192,12 +1044,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
               const resolvedModel = resolveRoseModelChoice(localSettings, rc);
               const activePromptText = buildRoseSystemPrompt(rc, undefined, localSettings);
               const resolvedCombo = resolveRosePersonalityCombination(rc);
-              const activePrimaryMode = resolvedCombo.modeDef;
-              const presetDesc =
-                ROSE_PRESET_DESCRIPTIONS[rc.preset] || activePrimaryMode.instructions;
-              const presetSamples =
-                ROSE_PRESET_SAMPLES[rc.preset] || activePrimaryMode.samples;
-              const roseTemp = getRoseTemperature(rc.preset, rc);
+              const warmthMeta = resolvedCombo.warmthMeta;
+              const roseTemp = getRoseTemperature(rc);
 
               const modelChoices: Array<{
                 id: RoseModelChoiceType;
@@ -1232,7 +1080,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
               return (
                 <div className="space-y-4 animate-in fade-in duration-150">
-                  {/* 1. Rose Identity & Complete Isolation Banner */}
+                  {/* 1. Rose Identity & Strict Isolation Banner */}
                   <div className="p-3.5 rounded-2xl bg-[#081533] border border-rose-500/40 flex items-center gap-3 shadow-[0_0_20px_rgba(244,63,94,0.15)]">
                     <div
                       className="w-12 h-12 rounded-full overflow-hidden border-2 shrink-0 bg-[#071126]"
@@ -1253,7 +1101,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                           Rose Character
                         </h4>
                         <span className="px-2 py-0.5 rounded-md bg-rose-500/20 border border-rose-400/40 text-[10px] font-bold text-rose-300">
-                          {activePrimaryMode.name}
+                          {warmthMeta.label} ({warmthMeta.bengaliLabel})
                         </span>
                         <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-400/30 text-[10px] font-mono text-emerald-300">
                           characterSettings.rose
@@ -1268,214 +1116,189 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     </div>
                   </div>
 
-                  {/* 2. Primary Personality Mode Selector (Only ONE Primary Mode Active at a Time) */}
+                  {/* 2. Emotional Warmth Control (Single-select) */}
                   <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-3">
                     <div className="flex items-center justify-between gap-2">
                       <div>
                         <label className="text-xs font-extrabold text-white block">
-                          1) Primary Personality Mode (মূল ব্যক্তিত্ব মোড)
+                          1) Emotional Warmth Control (সামগ্রিক আবেগী উষ্ণতা)
                         </label>
                         <p className="text-[10px] text-slate-400 mt-0.5">
-                          Only ONE primary mode is active at a time. Selecting a mode immediately updates Rose's tone & traits.
+                          Single-select control for Rose&apos;s overall emotional warmth level.
                         </p>
                       </div>
-                      <span className="px-2 py-0.5 rounded-lg bg-rose-500/20 border border-rose-400/40 text-[10px] font-extrabold text-rose-300 shrink-0">
-                        1 Active Mode
+                      <span className="px-2.5 py-0.5 rounded-lg bg-rose-500/20 border border-rose-400/40 text-[10px] font-extrabold text-rose-300 shrink-0">
+                        {warmthMeta.label} Active
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      {Object.values(ROSE_PRIMARY_MODES).map((mode) => {
-                        const isSelected = rc.activeMode === mode.id;
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                      {(['gentle', 'warm', 'deep'] as const).map((warmthKey) => {
+                        const meta = ROSE_WARMTH_LEVELS[warmthKey];
+                        const isSelected = rc.emotionalWarmth === warmthKey;
                         return (
                           <button
-                            key={mode.id}
+                            key={warmthKey}
                             type="button"
-                            onClick={() => handleSelectRosePrimaryMode(mode.id)}
-                            className={`p-3 rounded-xl border text-left transition-all flex items-start justify-between gap-2 ${
+                            onClick={() => handleSelectRoseEmotionalWarmth(warmthKey)}
+                            className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 ${
                               isSelected
-                                ? 'bg-rose-500/20 border-rose-400 text-white shadow-[0_0_14px_rgba(244,63,94,0.3)]'
+                                ? 'bg-rose-500/20 border-rose-400 text-white shadow-[0_0_14px_rgba(244,63,94,0.3)] ring-1 ring-rose-400/50'
                                 : 'bg-[#050c20] border-slate-800 text-slate-300 hover:border-sky-500/40 hover:text-white'
                             }`}
                           >
-                            <div className="min-w-0 space-y-0.5">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <p className="text-xs font-extrabold truncate">{mode.name}</p>
+                            <div className="space-y-1">
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="text-xs font-extrabold text-white">
+                                  {meta.label}
+                                </span>
+                                {isSelected && (
+                                  <div className="w-4 h-4 rounded-full bg-rose-500 text-white flex items-center justify-center shrink-0">
+                                    <Check className="w-2.5 h-2.5" />
+                                  </div>
+                                )}
                               </div>
-                              <p className="text-[10px] text-rose-300/90 font-semibold truncate">
-                                {mode.bengaliName}
+                              <p className="text-[10px] font-semibold text-rose-300">
+                                {meta.bengaliLabel}
                               </p>
-                              <p className="text-[10px] text-slate-400 line-clamp-2 leading-snug pt-0.5">
-                                {mode.shortDesc}
+                              <p className="text-[10px] text-slate-400 leading-snug pt-0.5">
+                                {meta.desc}
                               </p>
                             </div>
-                            {isSelected && (
-                              <div className="w-5 h-5 rounded-full bg-rose-500 text-white flex items-center justify-center shrink-0 mt-0.5">
-                                <Check className="w-3 h-3" />
-                              </div>
-                            )}
+                            <span
+                              className={`text-[9px] font-mono px-2 py-0.5 rounded-md w-fit ${
+                                isSelected
+                                  ? 'bg-rose-500/30 text-rose-200 border border-rose-400/30'
+                                  : 'bg-slate-800/80 text-slate-400'
+                              }`}
+                            >
+                              {warmthKey === 'warm' ? 'Default' : warmthKey}
+                            </span>
                           </button>
                         );
                       })}
                     </div>
-
-                    {/* Bengali Sub-Presets (Backward-compatible quick flavors) */}
-                    <div className="pt-2 border-t border-sky-950/80 space-y-2">
-                      <span className="text-[11px] font-bold text-sky-300 block">
-                        বাংলা বিশেষ প্রিসেট ও আবহ (Bengali Character Flavors):
-                      </span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {ROSE_CHARACTER_PRESET_CARDS.map((card) => {
-                          const isPresetSelected = rc.preset === card.id;
-                          return (
-                            <button
-                              key={card.id}
-                              type="button"
-                              onClick={() => handleSelectRoseBengaliPreset(card.id)}
-                              title={card.subtitle}
-                              className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold transition-all flex items-center gap-1.5 ${
-                                isPresetSelected
-                                  ? 'bg-rose-500/25 border-rose-400 text-white shadow-[0_0_10px_rgba(244,63,94,0.25)]'
-                                  : 'bg-[#050c20] border-slate-800 text-slate-300 hover:border-sky-500/40 hover:text-white'
-                              }`}
-                            >
-                              <span>{card.label}</span>
-                              {isPresetSelected && <Check className="w-3 h-3 text-rose-300" />}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {/* Active Mode & Preset Details + Sample Dialogue */}
-                    <div className="p-3 rounded-xl bg-[#050c20] border border-rose-500/30 space-y-2 select-text">
-                      <div className="flex items-center justify-between flex-wrap gap-1">
-                        <span className="text-[11px] font-extrabold text-rose-300">
-                          Active Mode: {activePrimaryMode.name} ({rc.preset})
-                        </span>
-                        <span className="text-[10px] text-slate-400 font-mono">
-                          Intensity: {activePrimaryMode.emotionalIntensity} • Temp: {roseTemp}
-                        </span>
-                      </div>
-                      <p className="text-[10px] text-sky-200/90">
-                        <strong>Tone:</strong> {activePrimaryMode.tone} | <strong>Style:</strong>{' '}
-                        {activePrimaryMode.responseStyle}
-                      </p>
-                      {presetDesc && (
-                        <p className="text-[11px] text-slate-200 leading-relaxed">
-                          {presetDesc}
-                        </p>
-                      )}
-                      {presetSamples.length > 0 && (
-                        <div className="pt-1.5 border-t border-slate-800/80 space-y-1">
-                          <span className="text-[10px] font-bold text-sky-300 block">
-                            নমুনা সংলাপ (হুবহু নকল করো না, শুধু সুর ও ধরন বোঝো):
-                          </span>
-                          <ul className="space-y-1 text-[11px] text-slate-300 leading-relaxed">
-                            {presetSamples.map((sample, idx) => (
-                              <li key={idx}>
-                                • {formatSampleDialogueWithNickname(sample, rc.nickname)}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
                   </div>
 
-                  {/* 3. Character Trait On/Off Switches (Multiple Settings with On/Off Controls) */}
-                  <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-3">
+                  {/* 3. Personality Traits (12 On/Off Switches Grouped Into 3 Categories) */}
+                  <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-4">
                     <div className="flex items-center justify-between gap-2">
                       <div>
                         <label className="text-xs font-extrabold text-white block">
-                          2) Character Trait On/Off Switches (চরিত্রের বৈশিষ্ট্য চালু/বন্ধ)
+                          2) Personality Traits (ব্যক্তিত্বের অন/অফ ট্রেইটসমূহ)
                         </label>
                         <p className="text-[10px] text-slate-400 mt-0.5">
-                          Fine-tune how Rose behaves within her selected primary mode. Enabled traits are combined by priority.
+                          Individual On/Off controls grouped into 3 distinct categories.
                         </p>
                       </div>
-                      <span className="px-2 py-0.5 rounded-lg bg-sky-500/20 border border-sky-400/40 text-[10px] font-mono font-bold text-sky-300 shrink-0">
-                        {resolvedCombo.enabledTraitLabels.length} ON
+                      <span className="px-2.5 py-0.5 rounded-lg bg-sky-500/20 border border-sky-400/40 text-[10px] font-mono font-bold text-sky-300 shrink-0">
+                        {resolvedCombo.enabledTraitsCount} / {resolvedCombo.allTraitsCount} ON
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {ROSE_TRAIT_DEFINITIONS.map((trait) => {
-                        const isEnabled = Boolean(rc.traits?.[trait.key]);
-                        return (
-                          <div
-                            key={trait.key}
-                            onClick={() => handleToggleRoseTrait(trait.key)}
-                            className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2.5 ${
-                              isEnabled
-                                ? 'bg-sky-950/50 border-sky-400/60 text-white shadow-[0_0_12px_rgba(56,189,248,0.15)]'
-                                : 'bg-[#050c20] border-slate-800/90 text-slate-400 hover:border-slate-700'
-                            }`}
-                          >
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-[11px] font-extrabold text-white truncate">
-                                  {trait.label}
-                                </span>
-                              </div>
-                              <span className="text-[10px] text-sky-300/80 block truncate">
-                                {trait.bengaliLabel}
-                              </span>
-                            </div>
+                    {ROSE_TRAIT_CATEGORIES.map((cat) => {
+                      const categoryTraits = ROSE_TRAIT_DEFINITIONS.filter(
+                        (t) => t.category === cat.id
+                      );
+                      const enabledInCat = categoryTraits.filter((t) =>
+                        Boolean(rc.traits?.[t.key])
+                      ).length;
 
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <span
-                                className={`text-[9px] font-mono font-extrabold px-1.5 py-0.5 rounded ${
-                                  isEnabled
-                                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40'
-                                    : 'bg-slate-800 text-slate-400'
-                                }`}
-                              >
-                                {isEnabled ? 'ON' : 'OFF'}
+                      return (
+                        <div
+                          key={cat.id}
+                          className="p-3 rounded-xl bg-[#050c20]/90 border border-sky-950 space-y-2.5"
+                        >
+                          <div className="flex items-center justify-between gap-2 border-b border-sky-950/80 pb-1.5">
+                            <div>
+                              <span className="text-[11px] font-extrabold text-sky-300 tracking-wide">
+                                {cat.title} ({cat.bengaliTitle})
                               </span>
-                              <div
-                                className={`w-9 h-5 rounded-full relative transition-colors ${
-                                  isEnabled ? 'bg-emerald-500' : 'bg-slate-800'
-                                }`}
-                              >
-                                <div
-                                  className={`w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform ${
-                                    isEnabled ? 'translate-x-4.5' : 'translate-x-0.5'
-                                  }`}
-                                />
-                              </div>
+                              <p className="text-[10px] text-slate-400">{cat.desc}</p>
                             </div>
+                            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-sky-900/40 text-sky-300 border border-sky-700/40 shrink-0">
+                              {enabledInCat} / {categoryTraits.length}
+                            </span>
                           </div>
-                        );
-                      })}
-                    </div>
 
-                    {/* Priority Combination Summary */}
-                    <div className="p-3 rounded-xl bg-[#050c20] border border-sky-500/30 space-y-1.5 text-[10px]">
-                      <div className="flex items-center justify-between text-sky-300 font-bold">
-                        <span>Active Personality Combination (Priority System)</span>
-                        <span className="font-mono">Mode + {resolvedCombo.enabledTraitLabels.length} Traits</span>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {categoryTraits.map((trait) => {
+                              const isEnabled = Boolean(rc.traits?.[trait.key]);
+                              return (
+                                <div
+                                  key={trait.key}
+                                  onClick={() => handleToggleRoseTrait(trait.key)}
+                                  className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2.5 ${
+                                    isEnabled
+                                      ? 'bg-rose-950/30 border-rose-500/50 text-white shadow-[0_0_12px_rgba(244,63,94,0.15)]'
+                                      : 'bg-[#030816] border-slate-800/90 text-slate-400 hover:border-slate-700'
+                                  }`}
+                                >
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="text-[11px] font-extrabold text-white truncate">
+                                        {trait.label}
+                                      </span>
+                                      <span className="text-[10px] font-semibold text-rose-300/90 truncate">
+                                        ({trait.bengaliLabel})
+                                      </span>
+                                    </div>
+                                    <p className="text-[10px] text-slate-400 leading-snug line-clamp-2 mt-0.5">
+                                      {trait.desc}
+                                    </p>
+                                  </div>
+
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <span
+                                      className={`text-[9px] font-mono font-extrabold px-1.5 py-0.5 rounded ${
+                                        isEnabled
+                                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40'
+                                          : 'bg-slate-800 text-slate-400'
+                                      }`}
+                                    >
+                                      {isEnabled ? 'ON' : 'OFF'}
+                                    </span>
+                                    <div
+                                      className={`w-9 h-5 rounded-full relative transition-colors ${
+                                        isEnabled ? 'bg-rose-500' : 'bg-slate-800'
+                                      }`}
+                                    >
+                                      <div
+                                        className={`w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform ${
+                                          isEnabled ? 'translate-x-4.5' : 'translate-x-0.5'
+                                        }`}
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {/* Active Configuration Summary */}
+                    <div className="p-3 rounded-xl bg-[#050c20] border border-rose-500/30 space-y-1.5 text-[10px]">
+                      <div className="flex items-center justify-between text-rose-300 font-bold">
+                        <span>Active Personality Configuration</span>
+                        <span className="font-mono">
+                          Warmth: {warmthMeta.label} • {resolvedCombo.enabledTraitsCount} Traits Enabled
+                        </span>
                       </div>
                       <p className="text-slate-300 leading-relaxed">
-                        <strong>Primary Mode:</strong> {activePrimaryMode.name} ({activePrimaryMode.bengaliName})
+                        <strong>Emotional Warmth:</strong> {warmthMeta.label} ({warmthMeta.bengaliLabel}) — {warmthMeta.desc}
                       </p>
                       <p className="text-slate-300 leading-relaxed">
-                        <strong>Enabled Traits:</strong>{' '}
+                        <strong>Active Traits:</strong>{' '}
                         {resolvedCombo.enabledTraitLabels.length > 0
                           ? resolvedCombo.enabledTraitLabels.join(', ')
-                          : 'None (Primary mode defaults only)'}
+                          : 'None (Base gentle warmth only)'}
                       </p>
-                      {resolvedCombo.disabledOverrideInstructions.length > 0 && (
-                        <div className="pt-1 border-t border-slate-800 text-amber-300 space-y-0.5">
-                          {resolvedCombo.disabledOverrideInstructions.map((note, idx) => (
-                            <p key={idx}>{note}</p>
-                          ))}
-                        </div>
-                      )}
                     </div>
                   </div>
 
-                  {/* 4. Custom character (বড় টেক্সট বাক্স, সর্বোচ্চ ১৫০০ অক্ষর, গণনা দেখাও) */}
+                  {/* 4. Custom Character Instructions (Optional, max 1500 chars) */}
                   <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-2">
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-extrabold text-white">
@@ -1490,201 +1313,45 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                       </span>
                     </div>
                     <p className="text-[10px] text-slate-400">
-                      {rc.activeMode === 'custom' || rc.preset === 'Custom'
-                        ? 'Custom বাছা আছে: এই লেখাই Rose-এর মূল চরিত্র হিসেবে কাজ করবে।'
-                        : `${activePrimaryMode.name} বাছা আছে: এই লেখা অতিরিক্ত নির্দেশ হিসেবে প্রিসেটের সাথে যোগ হবে (খালি রাখা যাবে)।`}
+                      Optional: Add any specific conversational guidance or personal touches for Rose.
                     </p>
                     <textarea
                       rows={3}
                       maxLength={1500}
-                      value={rc.customCharacter}
+                      value={rc.customCharacter || ''}
                       onChange={(e) =>
                         handleRoseCharacterChange(
                           'customCharacter',
                           e.target.value.slice(0, 1500)
                         )
                       }
-                      placeholder="ছোটবেলার বন্ধুর মতো, মজা করে, কথ্য বাংলায়, আমাকে নাম ধরে ডাকবে।"
+                      placeholder="যেমন: কথা বলার সময় কোমল থাকবে, কাজের মাঝে বিশ্রামের কথা মনে করিয়ে দেবে..."
                       className="w-full px-3 py-2 rounded-xl bg-[#050c20] border border-sky-500/30 text-white text-xs focus:outline-none focus:border-rose-400 transition-all resize-none leading-relaxed placeholder:text-slate-500"
                     />
                   </div>
 
-                  {/* 5. Emotional Intensity & Speech Fine-Tuning */}
-                  <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-4">
-                    <label className="text-xs font-extrabold text-white block">
-                      4) Emotional Intensity & Speech Controls (আবেগের মাত্রা ও কথার ধরন)
-                    </label>
-
-                    {/* ভাষার রূপ */}
-                    <div className="space-y-1.5">
-                      <span className="text-[11px] font-bold text-slate-300 block">
-                        ভাষার রূপ
-                      </span>
-                      <div className="grid grid-cols-3 gap-2">
-                        {ROSE_LANGUAGE_STYLES.map((style) => {
-                          const active = rc.languageStyle === style;
-                          return (
-                            <button
-                              key={style}
-                              type="button"
-                              onClick={() => handleRoseCharacterChange('languageStyle', style)}
-                              className={`py-2 px-2 rounded-xl text-[11px] font-bold border transition-all ${
-                                active
-                                  ? 'bg-sky-500/25 border-sky-400 text-sky-200 shadow-[0_0_10px_rgba(56,189,248,0.25)]'
-                                  : 'bg-[#050c20] border-slate-800 text-slate-400 hover:text-white'
-                              }`}
-                            >
-                              {style}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {/* সম্বোধন */}
-                    <div className="space-y-1.5">
-                      <span className="text-[11px] font-bold text-slate-300 block">
-                        সম্বোধন
-                      </span>
-                      <div className="grid grid-cols-3 gap-2">
-                        {ROSE_PRONOUNS.map((p) => {
-                          const active = rc.pronoun === p;
-                          return (
-                            <button
-                              key={p}
-                              type="button"
-                              onClick={() => handleRoseCharacterChange('pronoun', p)}
-                              className={`py-2 px-2 rounded-xl text-xs font-bold border transition-all ${
-                                active
-                                  ? 'bg-sky-500/25 border-sky-400 text-sky-200 shadow-[0_0_10px_rgba(56,189,248,0.25)]'
-                                  : 'bg-[#050c20] border-slate-800 text-slate-400 hover:text-white'
-                              }`}
-                            >
-                              {p}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {/* আবেগ (০-১০ স্লাইডার) ও রসিকতা (০-১০ স্লাইডার) */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[11px] font-bold text-slate-300">
-                            Emotional Intensity (আবেগ)
-                          </span>
-                          <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-mono text-[11px] font-bold">
-                            {rc.emotionLevel} / 10
-                          </span>
-                        </div>
-                        <input
-                          type="range"
-                          min={0}
-                          max={10}
-                          step={1}
-                          value={rc.emotionLevel}
-                          onChange={(e) =>
-                            handleRoseCharacterChange('emotionLevel', Number(e.target.value))
-                          }
-                          className="w-full h-2 bg-slate-900 rounded-lg appearance-none cursor-pointer accent-rose-400"
-                        />
-                      </div>
-
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[11px] font-bold text-slate-300">
-                            Humor Level (রসিকতা)
-                          </span>
-                          <span className="px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 font-mono text-[11px] font-bold">
-                            {rc.humorLevel} / 10
-                          </span>
-                        </div>
-                        <input
-                          type="range"
-                          min={0}
-                          max={10}
-                          step={1}
-                          value={rc.humorLevel}
-                          onChange={(e) =>
-                            handleRoseCharacterChange('humorLevel', Number(e.target.value))
-                          }
-                          className="w-full h-2 bg-slate-900 rounded-lg appearance-none cursor-pointer accent-sky-400"
-                        />
-                      </div>
-                    </div>
-
-                    {/* উত্তরের দৈর্ঘ্য ও ইমোজি চালু-বন্ধ */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                      <div className="space-y-1.5">
-                        <span className="text-[11px] font-bold text-slate-300 block">
-                          উত্তরের দৈর্ঘ্য
-                        </span>
-                        <div className="grid grid-cols-2 gap-2">
-                          {ROSE_REPLY_LENGTHS.map((len) => {
-                            const active = rc.replyLength === len;
-                            return (
-                              <button
-                                key={len}
-                                type="button"
-                                onClick={() => handleRoseCharacterChange('replyLength', len)}
-                                className={`py-2 px-2 rounded-xl text-xs font-bold border transition-all ${
-                                  active
-                                    ? 'bg-sky-500/25 border-sky-400 text-sky-200'
-                                    : 'bg-[#050c20] border-slate-800 text-slate-400 hover:text-white'
-                                }`}
-                              >
-                                {len}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between p-3 rounded-xl bg-[#050c20] border border-slate-800">
-                        <div>
-                          <span className="text-xs font-bold text-white block">ইমোজি</span>
-                          <span className="text-[10px] text-slate-400">
-                            {rc.useEmoji ? 'চালু (ON)' : 'বন্ধ (OFF)'}
-                          </span>
-                        </div>
-                        <label className="relative inline-flex items-center cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={rc.useEmoji}
-                            onChange={(e) =>
-                              handleRoseCharacterChange('useEmoji', e.target.checked)
-                            }
-                            className="sr-only peer"
-                          />
-                          <div className="w-10 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
-                        </label>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 6. ডাকনাম */}
+                  {/* 5. ডাকনাম (Rose Addressing Preference) */}
                   <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-2">
                     <label className="text-xs font-extrabold text-white block">
-                      5) ডাকনাম (Rose আপনাকে কী নামে ডাকবে)
+                      4) ডাকনাম (Rose আপনাকে কী নামে সম্বোধন করবে)
                     </label>
                     <p className="text-[10px] text-slate-400">
-                      খালি থাকলে নমুনা সংলাপ থেকে ওই শব্দ বাদ যাবে এবং Voice & Language-এর নাম ({localSettings.userName || 'খালি'}) ব্যবহার করবে।
+                      খালি থাকলে Voice & Language-এর নাম ({localSettings.userName || 'খালি'}) ব্যবহার করবে।
                     </p>
                     <input
                       type="text"
-                      value={rc.nickname}
+                      value={rc.nickname || ''}
                       onChange={(e) => handleRoseCharacterChange('nickname', e.target.value)}
                       placeholder="ডাকনাম লিখুন (ঐচ্ছিক)..."
                       className="w-full px-3.5 py-2 rounded-xl bg-[#050c20] border border-sky-500/30 text-white text-xs focus:outline-none focus:border-sky-400 transition-all placeholder:text-slate-500"
                     />
                   </div>
 
-                  {/* 7. Rose-এর জন্য মডেল বাছাই (শুধু Rose-এর উত্তরে প্রযোজ্য) */}
+                  {/* 6. Rose AI Model Selection */}
                   <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-2.5">
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-extrabold text-white">
-                        6) Rose-এর জন্য মডেল বাছাই
+                        5) Rose-এর জন্য মডেল বাছাই
                       </label>
                       <span className="text-[10px] text-sky-300 font-bold">
                         শুধু Rose-এর উত্তরে প্রযোজ্য
@@ -1719,7 +1386,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     </div>
                   </div>
 
-                  {/* 8. Show active prompt (ভাঁজ-হওয়া অংশ, শুধু পড়ার জন্য) */}
+                  {/* 7. Show active Rose system prompt */}
                   <div className="rounded-2xl bg-[#081533] border border-sky-900/70 overflow-hidden">
                     <button
                       type="button"
@@ -1733,11 +1400,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                           <ChevronRight className="w-4 h-4 text-sky-400 shrink-0" />
                         )}
                         <span className="text-xs font-extrabold text-white">
-                          Show active Rose system prompt
+                          Show active Rose dynamic system prompt
                         </span>
                       </div>
                       <span className="text-[10px] font-bold text-rose-300 bg-rose-500/15 border border-rose-400/30 px-2.5 py-1 rounded-lg truncate">
-                        {activePrimaryMode.name} • {resolvedModel.model}
+                        {warmthMeta.label} • {resolvedModel.model}
                       </span>
                     </button>
 
@@ -1756,11 +1423,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     )}
                   </div>
 
-                  {/* 9. টেস্ট বাক্স */}
+                  {/* 8. Interactive Test Box */}
                   <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-3">
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-extrabold text-white">
-                        7) টেস্ট বাক্স (সেভ করার আগে পরীক্ষা করুন)
+                        6) টেস্ট বাক্স (সেভ করার আগে Rose-এর সাথে পরীক্ষা করুন)
                       </label>
                       <span className="text-[10px] text-slate-400">চ্যাটে সেভ হবে না</span>
                     </div>
@@ -1775,7 +1442,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                             handleTestRoseCharacter();
                           }
                         }}
-                        placeholder="পরীক্ষা করার জন্য একটি বাক্য লিখুন..."
+                        placeholder="পরীক্ষা করার জন্য একটি বাক্য লিখুন (যেমন: 'আজ মনটা একটু খারাপ')..."
                         className="flex-1 px-3 py-2 rounded-xl bg-[#050c20] border border-sky-500/30 text-white text-xs focus:outline-none focus:border-sky-400"
                       />
                       <button
@@ -1798,7 +1465,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                       >
                         <div className="flex items-center justify-between flex-wrap gap-1">
                           <span className="text-[11px] font-extrabold text-rose-300">
-                            চরিত্র: {roseTestOutput.character || activePrimaryMode.name} • মডেল:{' '}
+                            চরিত্র: {roseTestOutput.character || `Rose (${rc.emotionalWarmth})`} • মডেল:{' '}
                             {roseTestOutput.model || resolvedModel.model}
                           </span>
                           {roseTestOutput.emotion && !roseTestOutput.isError && (
@@ -1819,14 +1486,14 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     )}
                   </div>
 
-                  {/* 10. "Save" ও "Reset Rose settings" বাটন */}
+                  {/* 9. Action Buttons: Reset to Default and Save */}
                   <div className="flex items-center gap-2.5 pt-1">
                     <button
                       type="button"
                       onClick={handleResetRoseCharacter}
                       className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs border border-slate-700 transition-all"
                     >
-                      Reset Rose settings
+                      Reset to Default
                     </button>
                     <button
                       type="button"
@@ -1838,11 +1505,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     </button>
                   </div>
 
-                  {/* 11. নিচে ধূসর কার্ডে "সবসময় প্রযোজ্য নিয়ম (বদলানো যায় না)" তালিকা */}
+                  {/* 10. Immutable Rules Card */}
                   <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-700/70 space-y-2 text-slate-300 select-text">
                     <div className="flex items-center gap-2 text-xs font-extrabold text-slate-200">
                       <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                      <span>সবসময় প্রযোজ্য নিয়ম (বদলানো যায় না)</span>
+                      <span>সবসময় প্রযোজ্য নিয়ম (Safety & System Rules)</span>
                     </div>
                     <ul className="space-y-1.5 text-[11px] text-slate-400 leading-relaxed">
                       {ROSE_IMMUTABLE_RULES.map((rule, idx) => (
@@ -1854,7 +1521,6 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
               );
             })()}
 
-          {/* ========================================================= */}
           {/* VOICE & LANGUAGE SUB-SCREEN (YOUR NAME & ADDRESS AS)      */}
           {/* ========================================================= */}
           {activeScreen === 'voice-language' && (

@@ -174,76 +174,32 @@ export interface AgentSettingsConfig {
   elevenLabsVoiceId?: string;
 }
 
-export type RosePrimaryModeId =
-  | 'emotional_caring'
-  | 'gentle_calm'
-  | 'friendly_supportive'
-  | 'cheerful_positive'
-  | 'serious_thoughtful'
-  | 'quiet_reserved'
-  | 'motivational_encouraging'
-  | 'playful_lighthearted'
-  | 'professional_helpful'
-  | 'deep_reflective'
-  | 'custom';
-
-export type RoseCharacterPresetType =
-  | 'Emotional and caring'
-  | 'Gentle and calm'
-  | 'Friendly and supportive'
-  | 'Cheerful and positive'
-  | 'Serious and thoughtful'
-  | 'Quiet and reserved'
-  | 'Motivational and encouraging'
-  | 'Playful and lighthearted'
-  | 'Professional and helpful'
-  | 'Deep and reflective'
-  | 'Soul Bond'
-  | 'ইমোশনাল প্রিয়তমা'
-  | 'মিষ্টি ও যত্নশীল'
-  | 'দুষ্টু-মিষ্টি'
-  | 'গভীর আবেগী'
-  | 'কাছের মানুষ'
-  | 'Best Friend'
-  | 'Friendly'
-  | 'Professional'
-  | 'Funny'
-  | 'Teacher'
-  | 'GF Mode'
-  | 'Custom';
+export type RoseEmotionalWarmth = 'gentle' | 'warm' | 'deep';
 
 export interface RoseCharacterTraits {
-  emotionalSensitivity: boolean;
-  gentleTone: boolean;
-  friendlyStyle: boolean;
-  supportiveResponses: boolean;
-  deepConversations: boolean;
-  humor: boolean;
-  motivationalStyle: boolean;
-  conciseResponses: boolean;
-  detailedResponses: boolean;
-  formalLanguage: boolean;
-  casualBengaliLanguage: boolean;
+  sweetGentle: boolean;
+  emotionallyAware: boolean;
+  caringSupportive: boolean;
+  attentiveListener: boolean;
+  calmReassuring: boolean;
+  deepThoughtful: boolean;
+  cheerfulPositive: boolean;
+  motivational: boolean;
+  friendlyNatural: boolean;
+  quietSoftSpoken: boolean;
+  empathetic: boolean;
+  thoughtfulQuestions: boolean;
 }
 
-export type RoseLanguageStyleType = 'শুদ্ধ বাংলা' | 'কথ্য বাংলা' | 'বাংলা-ইংরেজি মিশ্র';
-export type RosePronounType = 'তুমি' | 'আপনি' | 'তুই';
-export type RoseReplyLengthType = 'ছোট' | 'মাঝারি';
 export type RoseModelChoiceType = 'auto' | 'groq' | 'gemini';
 
 export interface RoseCharacterConfig {
-  activeMode: RosePrimaryModeId; // Only ONE primary mode active at a time
-  traits: RoseCharacterTraits; // Individual On/Off controls
-  preset: RoseCharacterPresetType; // default 'Emotional and caring'
-  customCharacter: string; // max 1500 chars
-  languageStyle: RoseLanguageStyleType; // default 'কথ্য বাংলা'
-  pronoun: RosePronounType; // default 'তুমি'
-  emotionLevel: number; // 0 to 10, default 8
-  humorLevel: number; // 0 to 10, default 4
-  replyLength: RoseReplyLengthType; // 'ছোট' | 'মাঝারি', default 'ছোট'
-  useEmoji: boolean; // default false
-  nickname: string; // default ''
-  modelChoice?: RoseModelChoiceType; // default 'auto'
+  characterId?: 'rose';
+  emotionalWarmth: RoseEmotionalWarmth;
+  traits: RoseCharacterTraits;
+  nickname?: string;
+  customCharacter?: string;
+  modelChoice?: RoseModelChoiceType;
 }
 
 export interface RoseCharacterNamespace {
