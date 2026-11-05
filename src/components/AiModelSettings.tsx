@@ -106,8 +106,8 @@ export const AiModelSettings: React.FC<AiModelSettingsProps> = ({
 
     const apiKey =
       providerToTest === 'groq'
-        ? cleanApiKey(connections.groqKey)
-        : cleanApiKey(connections.geminiKey);
+        ? cleanApiKey(connections.groqKey, 'groq')
+        : cleanApiKey(connections.geminiKey, 'gemini');
 
     if (providerToTest === 'groq' && !apiKey) {
       setIsTesting(false);
@@ -123,13 +123,15 @@ export const AiModelSettings: React.FC<AiModelSettingsProps> = ({
     }
 
     const controller = new AbortController();
+    let didTimeout = false;
     const timeoutId = setTimeout(() => {
+      didTimeout = true;
       try {
-        controller.abort();
+        controller.abort('REQUEST_TIMEOUT');
       } catch {
         // ignore
       }
-    }, 15000);
+    }, 25000);
 
     const startTime = performance.now();
 
@@ -155,11 +157,10 @@ export const AiModelSettings: React.FC<AiModelSettingsProps> = ({
           signal: controller.signal,
         });
 
-        clearTimeout(timeoutId);
+        const data = await res.json().catch(() => ({}));
         const elapsed = Math.round(performance.now() - startTime);
 
         if (res.status === 200) {
-          const data = await res.json();
           responseText =
             data?.choices?.[0]?.message?.content?.trim() || 'No text response';
           setTestResult({
@@ -225,11 +226,10 @@ export const AiModelSettings: React.FC<AiModelSettingsProps> = ({
           signal: controller.signal,
         });
 
-        clearTimeout(timeoutId);
+        const data = await res.json().catch(() => ({}));
         const elapsed = Math.round(performance.now() - startTime);
 
         if (res.status === 200) {
-          const data = await res.json();
           responseText = (data?.text || '').trim() || 'No text';
           setTestResult({
             success: true,
@@ -245,7 +245,7 @@ export const AiModelSettings: React.FC<AiModelSettingsProps> = ({
             model: modelToTest,
             provider: providerToTest,
             elapsedMs: elapsed,
-            errorMessage: 'কী ভুল বা বাতিল',
+            errorMessage: data?.error || 'কী ভুল বা বাতিল',
           });
           onToast('কী ভুল');
         } else if (res.status === 404) {
@@ -272,21 +272,24 @@ export const AiModelSettings: React.FC<AiModelSettingsProps> = ({
             model: modelToTest,
             provider: providerToTest,
             elapsedMs: elapsed,
-            errorMessage: 'অনুরোধ ব্যর্থ হয়েছে',
+            errorMessage: data?.error || 'অনুরোধ ব্যর্থ হয়েছে',
           });
           onToast('টেস্ট ব্যর্থ হয়েছে');
         }
       }
     } catch {
-      clearTimeout(timeoutId);
+      const msg = didTimeout
+        ? 'Connection timed out. Please try again. (সংযোগ সময়সীমা শেষ হয়েছে)'
+        : 'ইন্টারনেট সমস্যা বা সংযোগ সময়সীমা শেষ';
       setTestResult({
         success: false,
         model: modelToTest,
         provider: providerToTest,
-        errorMessage: 'ইন্টারনেট সমস্যা বা সংযোগ সময়সীমা শেষ',
+        errorMessage: msg,
       });
-      onToast('ইন্টারনেট সমস্যা');
+      onToast(didTimeout ? 'সময়সীমা শেষ' : 'ইন্টারনেট সমস্যা');
     } finally {
+      clearTimeout(timeoutId);
       setIsTesting(false);
     }
   };

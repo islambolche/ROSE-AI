@@ -3,7 +3,7 @@ import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { WebSocketServer, WebSocket } from 'ws';
 
 dotenv.config();
@@ -17,77 +17,273 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
 app.use(express.json({ limit: '10mb' }));
 
-// Helper to obtain a GoogleGenAI instance with 'aistudio-build' telemetry header.
-// This is called at request time to ensure the user's latest saved key is used.
-// It no longer falls back to environment variables.
-function getGeminiClient(customApiKey?: string): { client: GoogleGenAI; keyUsed: boolean } {
-  const key = (customApiKey || '').trim();
-  if (!key) {
-    return { client: null as any, keyUsed: false };
+/**
+ * Cleans an API key string by removing hidden/zero-width characters,
+ * accidental .env prefixes (e.g. GEMINI_API_KEY=), Bearer prefixes, quotes, and whitespace.
+ * Never logs or exposes the key.
+ */
+function cleanServerApiKey(raw?: string): string {
+  if (!raw || typeof raw !== 'string') return '';
+  let cleaned = raw
+    .replace(/[\u200B-\u200D\uFEFF\u0000-\u001F\u007F-\u009F]/g, '')
+    .trim()
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .trim();
+
+  // Strip common accidental prefixes like "GEMINI_API_KEY=", "GOOGLE_API_KEY=", "API_KEY=", "Bearer "
+  cleaned = cleaned
+    .replace(/^(?:export\s+)?(?:VITE_)?(?:GEMINI_API_KEY|GOOGLE_API_KEY|API_KEY)\s*=\s*/i, '')
+    .replace(/^Bearer\s+/i, '')
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .replace(/\s+/g, '');
+
+  // If already starts with AIza, preserve the entire key without truncating
+  if (cleaned.startsWith('AIza')) {
+    return cleaned;
   }
+  const aizaMatch = cleaned.match(/(AIza[0-9A-Za-z_-]{30,80})/);
+  if (aizaMatch) {
+    return aizaMatch[1];
+  }
+
+  return cleaned;
+}
+
+/**
+ * Redacts any potential API key patterns from error messages so keys are never leaked in logs or responses.
+ */
+function sanitizeErrorMessage(rawMsg: string): string {
+  if (!rawMsg) return '';
+  return rawMsg
+    .replace(/AIza[0-9A-Za-z_-]{10,}/g, '[REDACTED_KEY]')
+    .replace(/gsk_[0-9A-Za-z_-]{10,}/g, '[REDACTED_KEY]')
+    .replace(/sk_[0-9A-Za-z_-]{10,}/g, '[REDACTED_KEY]')
+    .replace(/key=[0-9A-Za-z_-]{10,}/gi, 'key=[REDACTED_KEY]');
+}
+
+// Helper to obtain a GoogleGenAI instance with 'aistudio-build' telemetry header.
+// Called at request time to ensure the user's latest key is used.
+function getGeminiClient(customApiKey?: string): {
+  client: GoogleGenAI | null;
+  keyUsed: boolean;
+  cleanedLength: number;
+  wrongProviderHint?: string;
+} {
+  const key = cleanServerApiKey(customApiKey) || cleanServerApiKey(process.env.GEMINI_API_KEY);
+  if (!key) {
+    return { client: null, keyUsed: false, cleanedLength: 0 };
+  }
+
+  if (key.startsWith('gsk_')) {
+    return {
+      client: null,
+      keyUsed: true,
+      cleanedLength: key.length,
+      wrongProviderHint:
+        'এটি Groq API কী (gsk_...)। অনুগ্রহ করে Gemini ঘরে সঠিক Google AI Studio (AIza...) কী দিন।',
+    };
+  }
+
+  if (key.startsWith('sk_') || key.startsWith('sk-')) {
+    return {
+      client: null,
+      keyUsed: true,
+      cleanedLength: key.length,
+      wrongProviderHint:
+        'এটি ElevenLabs বা OpenAI কী (sk_...)। অনুগ্রহ করে Gemini ঘরে সঠিক Google AI Studio (AIza...) কী দিন।',
+    };
+  }
+
   const client = new GoogleGenAI({
     apiKey: key,
     httpOptions: {
       headers: {
         'User-Agent': 'aistudio-build',
       },
+      timeout: 15000,
     },
   });
-  return { client, keyUsed: true };
+  return { client, keyUsed: true, cleanedLength: key.length };
 }
 
 // -------------------------------------------------------------
 // 1. Validate / Check Gemini Connection
 // -------------------------------------------------------------
 app.post('/api/gemini/validate', async (req: Request, res: Response) => {
+  const startTime = Date.now();
   const { apiKey } = req.body || {};
-  const { client, keyUsed } = getGeminiClient(apiKey);
+  const cleanedKey = cleanServerApiKey(apiKey);
 
-  if (!keyUsed || !client) {
+  console.log(`[Gemini Validate] Request started (cleanedKeyLength=${cleanedKey.length})`);
+
+  if (!cleanedKey) {
+    console.warn('[Gemini Validate] Request failed: No API key provided');
+    return res.status(400).json({
+      ok: false,
+      status: 400,
+      errorType: 'missing_key',
+      message: 'কী দিন (No API key provided)',
+    });
+  }
+
+  if (cleanedKey.startsWith('gsk_')) {
+    return res.status(400).json({
+      ok: false,
+      status: 400,
+      errorType: 'invalid_key',
+      message: 'এটি Groq API কী (gsk_...)। Gemini ঘরে Google AI Studio (AIza...) কী দিন।',
+    });
+  }
+
+  if (cleanedKey.startsWith('sk_') || cleanedKey.startsWith('sk-')) {
+    return res.status(400).json({
+      ok: false,
+      status: 400,
+      errorType: 'invalid_key',
+      message: 'এটি ElevenLabs বা OpenAI কী (sk_...)। Gemini ঘরে Google AI Studio (AIza...) কী দিন।',
+    });
+  }
+
+  let client: GoogleGenAI;
+  try {
+    client = new GoogleGenAI({
+      apiKey: cleanedKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+        timeout: 12000,
+      },
+    });
+  } catch (initErr: any) {
+    return res.status(400).json({
+      ok: false,
+      status: 400,
+      errorType: 'invalid_key',
+      message: 'কী ভুল ফরম্যাটে আছে (Invalid key format)',
+    });
+  }
+
+  // Candidate models to try for fast validation:
+  // 1. gemini-2.5-flash (ultra-fast, ~300ms, widely available)
+  // 2. gemini-3.8-flash (with ThinkingLevel.LOW)
+  // 3. gemini-flash-latest
+  const candidateModels = ['gemini-2.5-flash', 'gemini-3.8-flash', 'gemini-flash-latest'];
+  let lastError: any = null;
+  let verifiedModel = '';
+
+  for (const model of candidateModels) {
+    try {
+      const config: Record<string, any> = {};
+      if (model === 'gemini-3.8-flash') {
+        config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+      } else {
+        config.maxOutputTokens = 5;
+      }
+
+      const response = await client.models.generateContent({
+        model,
+        contents: 'Hi',
+        config,
+      });
+
+      if (response) {
+        verifiedModel = model;
+        break;
+      }
+    } catch (err: any) {
+      lastError = err;
+      const status = Number(err?.status || err?.statusCode) || 500;
+      const rawMsg = String(err?.message || '');
+
+      const isModelNotFound =
+        status === 404 ||
+        rawMsg.includes('NOT_FOUND') ||
+        rawMsg.includes('not found') ||
+        rawMsg.includes('is not supported');
+
+      if (isModelNotFound && model !== candidateModels[candidateModels.length - 1]) {
+        console.log(`[Gemini Validate] Model ${model} returned 404/NOT_FOUND, trying fallback...`);
+        continue;
+      }
+
+      // For auth errors, quota errors, or other errors, stop immediately
+      break;
+    }
+  }
+
+  if (verifiedModel) {
+    const elapsedMs = Date.now() - startTime;
+    console.log(`[Gemini Validate] Success! (model=${verifiedModel}, elapsed=${elapsedMs}ms)`);
+    return res.status(200).json({
+      ok: true,
+      status: 200,
+      model: verifiedModel,
+      message: 'সফলভাবে সংযুক্ত (Connected)',
+    });
+  }
+
+  const elapsedMs = Date.now() - startTime;
+  const rawStatus = Number(lastError?.status || lastError?.statusCode) || 500;
+  const msg = sanitizeErrorMessage(String(lastError?.message || ''));
+
+  console.warn(
+    `[Gemini Validate] Request failed (status=${rawStatus}, elapsed=${elapsedMs}ms, reason=${msg.slice(0, 160)})`
+  );
+
+  // 1. Invalid API key (Google Gemini returns 400 with API_KEY_INVALID or 401/403)
+  if (
+    rawStatus === 400 ||
+    rawStatus === 401 ||
+    rawStatus === 403 ||
+    msg.includes('API_KEY_INVALID') ||
+    msg.includes('API key not valid') ||
+    msg.includes('INVALID_ARGUMENT') ||
+    msg.includes('PERMISSION_DENIED') ||
+    msg.includes('UNAUTHENTICATED')
+  ) {
     return res.status(401).json({
       ok: false,
       status: 401,
-      message: 'কী নেই (No API key provided)',
+      errorType: 'invalid_key',
+      message: 'কী ভুল বা বাতিল (Invalid Gemini API key — Google AI Studio থেকে সঠিক কী দিন)',
     });
   }
 
-  try {
-    // Correct method according to @google/genai SDK is generateContent
-    await client.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: [{ role: 'user', parts: [{ text: 'Hello' }] }],
-    });
-
-    return res.json({
-      ok: true,
-      status: 200,
-      message: 'সফলভাবে সংযুক্ত',
-    });
-  } catch (err: any) {
-    const status = err?.status || err?.statusCode || 500;
-    const msg = String(err?.message || '');
-    
-    if (status === 401 || status === 403 || msg.includes('API_KEY_INVALID') || msg.includes('PERMISSION_DENIED')) {
-      return res.status(status).json({
-        ok: false,
-        status,
-        message: `কী ভুল বা বাতিল: ${msg}`,
-      });
-    }
-    if (status === 429 || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota')) {
-      return res.status(429).json({
-        ok: false,
-        status: 429,
-        message: 'লিমিট শেষ',
-      });
-    }
-    
-    return res.status(status).json({
+  // 2. Quota or Rate Limit exceeded
+  if (rawStatus === 429 || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('quota')) {
+    return res.status(429).json({
       ok: false,
-      status,
-      message: msg || 'সার্ভার বা সংযোগ সমস্যা',
+      status: 429,
+      errorType: 'quota_exceeded',
+      message: 'লিমিট শেষ (Quota or rate limit exceeded)',
     });
   }
+
+  // 3. Timeout
+  if (
+    rawStatus === 408 ||
+    rawStatus === 504 ||
+    msg.toLowerCase().includes('timeout') ||
+    msg.toLowerCase().includes('timed out') ||
+    msg.toLowerCase().includes('aborted')
+  ) {
+    return res.status(504).json({
+      ok: false,
+      status: 504,
+      errorType: 'timeout',
+      message: 'সংযোগ সময়সীমা শেষ হয়েছে (Connection timed out. Please try again.)',
+    });
+  }
+
+  // 4. Other Server / API errors
+  const httpStatus = rawStatus >= 400 && rawStatus < 600 ? rawStatus : 500;
+  return res.status(httpStatus).json({
+    ok: false,
+    status: httpStatus,
+    errorType: 'api_error',
+    message: msg ? `Gemini API ত্রুটি: ${msg.slice(0, 120)}` : 'সার্ভার বা সংযোগ সমস্যা',
+  });
 });
 
 // -------------------------------------------------------------
@@ -103,11 +299,13 @@ app.post('/api/gemini/generate', async (req: Request, res: Response) => {
     generationConfig,
   } = req.body || {};
 
-  const { client, keyUsed } = getGeminiClient(apiKey);
+  const { client, keyUsed, wrongProviderHint } = getGeminiClient(apiKey);
 
   if (!keyUsed || !client) {
     return res.status(401).json({
-      error: 'API key missing. Please connect your Gemini key in Connections settings.',
+      error:
+        wrongProviderHint ||
+        'API key missing or invalid. Please connect your Gemini key in Connections settings.',
       status: 401,
     });
   }
@@ -140,46 +338,81 @@ app.post('/api/gemini/generate', async (req: Request, res: Response) => {
       formattedContents = sanitized;
     }
 
-    const config: any = {};
-    if (systemPrompt) {
-      config.systemInstruction = {
-        parts: [{ text: systemPrompt }],
-      };
-    }
-    if (generationConfig?.maxOutputTokens) {
-      config.maxOutputTokens = generationConfig.maxOutputTokens;
-    }
-    if (typeof generationConfig?.temperature === 'number') {
-      config.temperature = generationConfig.temperature;
-    }
-
     let targetModel = model || 'gemini-3.8-flash';
     if (targetModel.includes('3.5') || !targetModel.startsWith('gemini-')) {
       targetModel = 'gemini-3.8-flash';
     }
 
+    const buildConfigForModel = (modelName: string) => {
+      const cfg: any = {};
+      if (systemPrompt) {
+        cfg.systemInstruction = {
+          parts: [{ text: systemPrompt }],
+        };
+      }
+      const isGemini38Or4 =
+        modelName.includes('gemini-3.8') || modelName.includes('gemini-4');
+
+      if (isGemini38Or4) {
+        cfg.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+      } else {
+        if (generationConfig?.maxOutputTokens) {
+          cfg.maxOutputTokens = generationConfig.maxOutputTokens;
+        }
+        if (typeof generationConfig?.temperature === 'number') {
+          cfg.temperature = generationConfig.temperature;
+        }
+      }
+      return cfg;
+    };
+
+    const modelsToTry =
+      targetModel === 'gemini-3.8-flash'
+        ? ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-2.5-flash']
+        : [targetModel, 'gemini-flash-latest'];
+
     let response: any;
     let lastErr: any;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        response = await client.models.generateContent({
-          model: targetModel,
-          contents: formattedContents,
-          config,
-        });
-        lastErr = null;
-        break;
-      } catch (err: any) {
-        lastErr = err;
-        const status = err?.status || err?.statusCode || 500;
-        const msg = String(err?.message || '');
-        if (status === 503 || msg.includes('high demand') || msg.includes('UNAVAILABLE')) {
-          await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
-          continue;
+
+    for (const candidateModel of modelsToTry) {
+      let tryNextModel = false;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          response = await client.models.generateContent({
+            model: candidateModel,
+            contents: formattedContents,
+            config: buildConfigForModel(candidateModel),
+          });
+          lastErr = null;
+          break;
+        } catch (err: any) {
+          lastErr = err;
+          const status = err?.status || err?.statusCode || 500;
+          const msg = sanitizeErrorMessage(String(err?.message || ''));
+          if (
+            status === 404 ||
+            msg.includes('NOT_FOUND') ||
+            msg.includes('not found') ||
+            msg.includes('is not supported')
+          ) {
+            tryNextModel = true;
+            break;
+          }
+          if ((status === 503 || msg.includes('high demand') || msg.includes('UNAVAILABLE')) && attempt === 0) {
+            await new Promise((r) => setTimeout(r, 600));
+            continue;
+          }
+          throw err;
         }
-        throw err;
+      }
+      if (!lastErr && response) {
+        break;
+      }
+      if (!tryNextModel) {
+        break;
       }
     }
+
     if (lastErr) {
       throw lastErr;
     }
@@ -192,8 +425,14 @@ app.post('/api/gemini/generate', async (req: Request, res: Response) => {
       status: 200,
     });
   } catch (err: any) {
-    const status = err?.status || 500;
-    const message = err?.message || 'Gemini generation error';
+    const rawStatus = Number(err?.status || err?.statusCode) || 500;
+    const message = sanitizeErrorMessage(String(err?.message || 'Gemini generation error'));
+    const status =
+      rawStatus === 400 && (message.includes('API_KEY_INVALID') || message.includes('API key not valid'))
+        ? 401
+        : rawStatus >= 400 && rawStatus < 600
+        ? rawStatus
+        : 500;
     return res.status(status).json({
       error: message,
       status,

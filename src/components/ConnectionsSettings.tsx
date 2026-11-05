@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Sparkles,
   Zap,
@@ -16,8 +16,6 @@ import {
 import {
   ApiConnections,
   ConnectionProvider,
-  ConnectionStatus,
-  ConnectionState,
 } from '../types';
 import {
   cleanApiKey,
@@ -30,6 +28,8 @@ interface ConnectionsSettingsProps {
   onSaveConnections: (newConnections: ApiConnections) => void;
   onToast: (msg: string) => void;
 }
+
+export type VerificationStatusState = 'idle' | 'checking' | 'verified' | 'error' | 'saved';
 
 const PROVIDER_CONFIGS: {
   provider: ConnectionProvider;
@@ -65,82 +65,170 @@ const PROVIDER_CONFIGS: {
   },
 ];
 
+const VERIFIED_STORAGE_KEY = 'connection_verified_keys_v1';
+
+function getVerifiedKeysFromStorage(): Record<ConnectionProvider, string> {
+  try {
+    const raw = localStorage.getItem(VERIFIED_STORAGE_KEY);
+    if (raw) {
+      return JSON.parse(raw);
+    }
+  } catch {
+    // fallback
+  }
+  return { gemini: '', groq: '', elevenLabs: '' };
+}
+
+function saveVerifiedKeyToStorage(provider: ConnectionProvider, key: string) {
+  try {
+    const current = getVerifiedKeysFromStorage();
+    current[provider] = key;
+    localStorage.setItem(VERIFIED_STORAGE_KEY, JSON.stringify(current));
+  } catch {
+    // ignore
+  }
+}
+
+function removeVerifiedKeyFromStorage(provider: ConnectionProvider) {
+  try {
+    const current = getVerifiedKeysFromStorage();
+    current[provider] = '';
+    localStorage.setItem(VERIFIED_STORAGE_KEY, JSON.stringify(current));
+  } catch {
+    // ignore
+  }
+}
+
 export const ConnectionsSettings: React.FC<ConnectionsSettingsProps> = ({
   connections,
   onSaveConnections,
   onToast,
 }) => {
-  const [draftKeys, setDraftKeys] = useState<Record<ConnectionProvider, string>>({
-    gemini: connections.geminiKey || '',
-    groq: connections.groqKey || '',
-    elevenLabs: connections.elevenLabsKey || '',
+  // 1. apiKey state
+  const [apiKeys, setApiKeys] = useState<Record<ConnectionProvider, string>>({
+    gemini: cleanApiKey(connections.geminiKey || '', 'gemini'),
+    groq: cleanApiKey(connections.groqKey || '', 'groq'),
+    elevenLabs: cleanApiKey(connections.elevenLabsKey || '', 'elevenLabs'),
   });
 
+  // 2. isTesting state (loading indicator per provider)
+  const [isTesting, setIsTesting] = useState<Record<ConnectionProvider, boolean>>({
+    gemini: false,
+    groq: false,
+    elevenLabs: false,
+  });
+
+  // 3. Stored verified keys for reload persistence
+  const [lastVerifiedKeys, setLastVerifiedKeys] = useState<Record<ConnectionProvider, string>>(() =>
+    getVerifiedKeysFromStorage()
+  );
+
+  // 4. isVerified state
+  const [isVerified, setIsVerified] = useState<Record<ConnectionProvider, boolean>>(() => {
+    const stored = getVerifiedKeysFromStorage();
+    const gKey = cleanApiKey(connections.geminiKey || '', 'gemini');
+    const qKey = cleanApiKey(connections.groqKey || '', 'groq');
+    const eKey = cleanApiKey(connections.elevenLabsKey || '', 'elevenLabs');
+    return {
+      gemini: Boolean(gKey && gKey === stored.gemini),
+      groq: Boolean(qKey && qKey === stored.groq),
+      elevenLabs: Boolean(eKey && eKey === stored.elevenLabs),
+    };
+  });
+
+  // 5. Verification status state: 'idle' | 'checking' | 'verified' | 'error' | 'saved'
+  const [verificationStatus, setVerificationStatus] = useState<
+    Record<ConnectionProvider, VerificationStatusState>
+  >(() => {
+    const stored = getVerifiedKeysFromStorage();
+    const gKey = cleanApiKey(connections.geminiKey || '', 'gemini');
+    const qKey = cleanApiKey(connections.groqKey || '', 'groq');
+    const eKey = cleanApiKey(connections.elevenLabsKey || '', 'elevenLabs');
+    return {
+      gemini: gKey && gKey === stored.gemini ? 'saved' : 'idle',
+      groq: qKey && qKey === stored.groq ? 'saved' : 'idle',
+      elevenLabs: eKey && eKey === stored.elevenLabs ? 'saved' : 'idle',
+    };
+  });
+
+  // 6. errorMessage state
+  const [errorMessages, setErrorMessages] = useState<Record<ConnectionProvider, string>>({
+    gemini: '',
+    groq: '',
+    elevenLabs: '',
+  });
+
+  // 7. show/hide password toggle
   const [showKeys, setShowKeys] = useState<Record<ConnectionProvider, boolean>>({
     gemini: false,
     groq: false,
     elevenLabs: false,
   });
 
-  const [connectionStates, setConnectionStates] = useState<
-    Record<ConnectionProvider, ConnectionState>
-  >({
-    gemini: { status: 'not_set' },
-    groq: { status: 'not_set' },
-    elevenLabs: { status: 'not_set' },
-  });
-
-  const [isVerifying, setIsVerifying] = useState<
-    Record<ConnectionProvider, boolean>
-  >({
-    gemini: false,
-    groq: false,
-    elevenLabs: false,
-  });
-
-  const hasAutoVerifiedRef = useRef(false);
-
   // Sync state if external connections prop updates
   useEffect(() => {
-    setDraftKeys({
-      gemini: connections.geminiKey || '',
-      groq: connections.groqKey || '',
-      elevenLabs: connections.elevenLabsKey || '',
+    const cleanGemini = cleanApiKey(connections.geminiKey || '', 'gemini');
+    const cleanGroq = cleanApiKey(connections.groqKey || '', 'groq');
+    const cleanEleven = cleanApiKey(connections.elevenLabsKey || '', 'elevenLabs');
+    const stored = getVerifiedKeysFromStorage();
+
+    setApiKeys({
+      gemini: cleanGemini,
+      groq: cleanGroq,
+      elevenLabs: cleanEleven,
     });
-  }, [connections]);
 
-  // Auto-verify on screen open if keys exist
-  useEffect(() => {
-    if (hasAutoVerifiedRef.current) return;
-    hasAutoVerifiedRef.current = true;
+    const isGeminiVerified = Boolean(cleanGemini && cleanGemini === stored.gemini);
+    const isGroqVerified = Boolean(cleanGroq && cleanGroq === stored.groq);
+    const isElevenVerified = Boolean(cleanEleven && cleanEleven === stored.elevenLabs);
 
-    PROVIDER_CONFIGS.forEach(async ({ provider, keyField }) => {
-      const existingKey = cleanApiKey(connections[keyField] || '');
-      if (!existingKey) {
-        setConnectionStates((prev) => ({
-          ...prev,
-          [provider]: { status: 'not_set' },
-        }));
-        return;
-      }
-
-      setConnectionStates((prev) => ({
-        ...prev,
-        [provider]: { status: 'checking', message: 'যাচাই করা হচ্ছে...' },
-      }));
-      setIsVerifying((prev) => ({ ...prev, [provider]: true }));
-
-      const res = await validateConnection(provider, existingKey);
-      setConnectionStates((prev) => ({
-        ...prev,
-        [provider]: res,
-      }));
-      setIsVerifying((prev) => ({ ...prev, [provider]: false }));
+    setIsVerified({
+      gemini: isGeminiVerified,
+      groq: isGroqVerified,
+      elevenLabs: isElevenVerified,
     });
+
+    setVerificationStatus((prev) => ({
+      gemini: isGeminiVerified
+        ? 'saved'
+        : prev.gemini === 'checking'
+        ? 'checking'
+        : 'idle',
+      groq: isGroqVerified
+        ? 'saved'
+        : prev.groq === 'checking'
+        ? 'checking'
+        : 'idle',
+      elevenLabs: isElevenVerified
+        ? 'saved'
+        : prev.elevenLabs === 'checking'
+        ? 'checking'
+        : 'idle',
+    }));
   }, [connections]);
 
   const toggleShowKey = (provider: ConnectionProvider) => {
     setShowKeys((prev) => ({ ...prev, [provider]: !prev[provider] }));
+  };
+
+  // Change key handler: removes checkmark if key changed
+  const handleKeyChange = (provider: ConnectionProvider, newVal: string) => {
+    setApiKeys((prev) => ({ ...prev, [provider]: newVal }));
+    const cleaned = cleanApiKey(newVal, provider);
+    const verifiedKey = lastVerifiedKeys[provider] || '';
+
+    // 7. Change the key after verification → Previous verification checkmark is removed until the new key is verified
+    if (cleaned !== verifiedKey) {
+      setIsVerified((prev) => ({ ...prev, [provider]: false }));
+      setVerificationStatus((prev) => ({
+        ...prev,
+        [provider]: 'idle',
+      }));
+      setErrorMessages((prev) => ({ ...prev, [provider]: '' }));
+    } else if (cleaned && cleaned === verifiedKey) {
+      setIsVerified((prev) => ({ ...prev, [provider]: true }));
+      setVerificationStatus((prev) => ({ ...prev, [provider]: 'verified' }));
+    }
   };
 
   const handlePaste = async (provider: ConnectionProvider) => {
@@ -148,8 +236,7 @@ export const ConnectionsSettings: React.FC<ConnectionsSettingsProps> = ({
       if (typeof navigator !== 'undefined' && navigator.clipboard) {
         const text = await navigator.clipboard.readText();
         if (text) {
-          const cleaned = cleanApiKey(text);
-          setDraftKeys((prev) => ({ ...prev, [provider]: cleaned }));
+          handleKeyChange(provider, text);
           onToast('কী পেস্ট করা হয়েছে');
           return;
         }
@@ -160,117 +247,191 @@ export const ConnectionsSettings: React.FC<ConnectionsSettingsProps> = ({
     }
   };
 
+  // Real Test action
   const handleTest = async (provider: ConnectionProvider) => {
-    const rawVal = draftKeys[provider];
-    const cleaned = cleanApiKey(rawVal);
+    // Disable repeated clicks temporarily; do not allow multiple verification requests to run simultaneously
+    if (isTesting[provider]) return;
+
+    const rawVal = apiKeys[provider];
+    const cleaned = cleanApiKey(rawVal, provider);
 
     if (!cleaned) {
-      setConnectionStates((prev) => ({
-        ...prev,
-        [provider]: { status: 'not_set', message: 'প্রথমে কী লিখুন' },
-      }));
-      onToast('প্রথমে একটি কী লিখুন');
+      setIsVerified((prev) => ({ ...prev, [provider]: false }));
+      setVerificationStatus((prev) => ({ ...prev, [provider]: 'error' }));
+      setErrorMessages((prev) => ({ ...prev, [provider]: 'প্রথমে একটি API কী লিখুন' }));
+      onToast('প্রথমে একটি API কী লিখুন');
       return;
     }
 
-    setConnectionStates((prev) => ({
-      ...prev,
-      [provider]: { status: 'checking', message: 'যাচাই করা হচ্ছে...' },
-    }));
-    setIsVerifying((prev) => ({ ...prev, [provider]: true }));
+    setIsTesting((prev) => ({ ...prev, [provider]: true }));
+    setVerificationStatus((prev) => ({ ...prev, [provider]: 'checking' }));
+    setErrorMessages((prev) => ({ ...prev, [provider]: '' }));
 
-    const res = await validateConnection(provider, cleaned);
+    try {
+      const result = await validateConnection(provider, cleaned, {
+        source: 'manual_test',
+      });
 
-    setConnectionStates((prev) => ({
-      ...prev,
-      [provider]: res,
-    }));
-    setIsVerifying((prev) => ({ ...prev, [provider]: false }));
-
-    if (res.status === 'ready') {
-      onToast(`${CONNECTION_DETAILS[provider].name} সংযোগ সফল!`);
-    } else {
-      onToast(`${CONNECTION_DETAILS[provider].name}: ${res.message}`);
+      if (result.success) {
+        // 4. Stop loading, show green checkmark, status to VERIFIED, enable Save, store verified state
+        setIsVerified((prev) => ({ ...prev, [provider]: true }));
+        setVerificationStatus((prev) => ({ ...prev, [provider]: 'verified' }));
+        setLastVerifiedKeys((prev) => ({ ...prev, [provider]: cleaned }));
+        setErrorMessages((prev) => ({ ...prev, [provider]: '' }));
+        onToast(`${CONNECTION_DETAILS[provider].name} সফলভাবে যাচাই সম্পন্ন হয়েছে (Verified) ✓`);
+      } else {
+        setIsVerified((prev) => ({ ...prev, [provider]: false }));
+        setVerificationStatus((prev) => ({ ...prev, [provider]: 'error' }));
+        setErrorMessages((prev) => ({
+          ...prev,
+          [provider]: result.message || 'কী ভুল বা যাচাই ব্যর্থ হয়েছে',
+        }));
+        onToast(`${CONNECTION_DETAILS[provider].name}: ${result.message}`);
+      }
+    } catch (error: any) {
+      setIsVerified((prev) => ({ ...prev, [provider]: false }));
+      setVerificationStatus((prev) => ({ ...prev, [provider]: 'error' }));
+      const msg = error?.message || 'যাচাইয়ের সময় অপ্রত্যাশিত ত্রুটি হয়েছে';
+      setErrorMessages((prev) => ({ ...prev, [provider]: msg }));
+      onToast(`${CONNECTION_DETAILS[provider].name}: ${msg}`);
+    } finally {
+      // Loading state is ALWAYS cleared in finally block regardless of success, failure, timeout, or abort
+      setIsTesting((prev) => ({ ...prev, [provider]: false }));
     }
   };
 
+  // Save button action
   const handleSave = async (provider: ConnectionProvider) => {
-    const cleaned = cleanApiKey(draftKeys[provider]);
+    if (isTesting[provider]) return;
+
+    const rawVal = apiKeys[provider];
+    const cleaned = cleanApiKey(rawVal, provider);
     const config = PROVIDER_CONFIGS.find((c) => c.provider === provider);
     if (!config) return;
 
-    // Update draft with clean value
-    setDraftKeys((prev) => ({ ...prev, [provider]: cleaned }));
-
-    // Prepare updated connections object for central store
-    const updatedConnections: ApiConnections = {
-      ...connections,
-      [config.keyField]: cleaned,
-    };
-
-    onSaveConnections(updatedConnections);
-    onToast(`${CONNECTION_DETAILS[provider].name} কী সেভ করা হয়েছে`);
-
+    // Case 1: Empty key -> clear and save
     if (!cleaned) {
-      setConnectionStates((prev) => ({
-        ...prev,
-        [provider]: { status: 'not_set' },
-      }));
+      const updated: ApiConnections = {
+        ...connections,
+        [config.keyField]: '',
+      };
+      onSaveConnections(updated);
+      setIsVerified((prev) => ({ ...prev, [provider]: false }));
+      setVerificationStatus((prev) => ({ ...prev, [provider]: 'idle' }));
+      setLastVerifiedKeys((prev) => ({ ...prev, [provider]: '' }));
+      removeVerifiedKeyFromStorage(provider);
+      setErrorMessages((prev) => ({ ...prev, [provider]: '' }));
+      onToast(`${CONNECTION_DETAILS[provider].name} কী মুছে সেভ করা হয়েছে`);
       return;
     }
 
-    // Immediately validate after saving
-    setConnectionStates((prev) => ({
-      ...prev,
-      [provider]: { status: 'checking', message: 'যাচাই করা হচ্ছে...' },
-    }));
-    setIsVerifying((prev) => ({ ...prev, [provider]: true }));
+    // Case 2: Key has already been successfully verified and has not changed -> Save immediately without re-testing!
+    const verifiedKey = lastVerifiedKeys[provider] || '';
+    const alreadyVerified = isVerified[provider] && cleaned === verifiedKey;
 
-    const res = await validateConnection(provider, cleaned);
+    if (alreadyVerified) {
+      const updated: ApiConnections = {
+        ...connections,
+        [config.keyField]: cleaned,
+      };
+      onSaveConnections(updated);
+      setVerificationStatus((prev) => ({ ...prev, [provider]: 'saved' }));
+      saveVerifiedKeyToStorage(provider, cleaned);
+      setErrorMessages((prev) => ({ ...prev, [provider]: '' }));
+      onToast(`${CONNECTION_DETAILS[provider].name} সফলভাবে সেভ করা হয়েছে ✓`);
+      return;
+    }
 
-    setConnectionStates((prev) => ({
-      ...prev,
-      [provider]: res,
-    }));
-    setIsVerifying((prev) => ({ ...prev, [provider]: false }));
+    // Case 3: Key has changed and is not yet verified -> verify it first!
+    setIsTesting((prev) => ({ ...prev, [provider]: true }));
+    setVerificationStatus((prev) => ({ ...prev, [provider]: 'checking' }));
+    setErrorMessages((prev) => ({ ...prev, [provider]: '' }));
+
+    try {
+      const result = await validateConnection(provider, cleaned, {
+        source: 'save',
+      });
+
+      if (result.success) {
+        // Only save after successful verification
+        const updated: ApiConnections = {
+          ...connections,
+          [config.keyField]: cleaned,
+        };
+        onSaveConnections(updated);
+
+        setIsVerified((prev) => ({ ...prev, [provider]: true }));
+        setLastVerifiedKeys((prev) => ({ ...prev, [provider]: cleaned }));
+        setVerificationStatus((prev) => ({ ...prev, [provider]: 'saved' }));
+        saveVerifiedKeyToStorage(provider, cleaned);
+        setErrorMessages((prev) => ({ ...prev, [provider]: '' }));
+        onToast(`${CONNECTION_DETAILS[provider].name} যাচাই ও সেভ সম্পন্ন হয়েছে ✓`);
+      } else {
+        setIsVerified((prev) => ({ ...prev, [provider]: false }));
+        setVerificationStatus((prev) => ({ ...prev, [provider]: 'error' }));
+        setErrorMessages((prev) => ({
+          ...prev,
+          [provider]: result.message || 'কী যাচাই ব্যর্থ হয়েছে',
+        }));
+        onToast(`${CONNECTION_DETAILS[provider].name} সেভ করা যায়নি: ${result.message}`);
+      }
+    } catch (error: any) {
+      setIsVerified((prev) => ({ ...prev, [provider]: false }));
+      setVerificationStatus((prev) => ({ ...prev, [provider]: 'error' }));
+      const msg = error?.message || 'যাচাই ও সেভ করার সময় ত্রুটি হয়েছে';
+      setErrorMessages((prev) => ({ ...prev, [provider]: msg }));
+      onToast(`${CONNECTION_DETAILS[provider].name}: ${msg}`);
+    } finally {
+      // Loading state is always cleared in finally block
+      setIsTesting((prev) => ({ ...prev, [provider]: false }));
+    }
   };
 
   // Connected count for summary bar
-  const readyCount = PROVIDER_CONFIGS.filter(
-    (c) => connectionStates[c.provider].status === 'ready'
+  const verifiedCount = PROVIDER_CONFIGS.filter(
+    (c) =>
+      isVerified[c.provider] ||
+      verificationStatus[c.provider] === 'verified' ||
+      verificationStatus[c.provider] === 'saved'
   ).length;
 
-  const renderStatusBadge = (status: ConnectionStatus) => {
-    switch (status) {
-      case 'ready':
-        return (
-          <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.35)] flex items-center gap-1">
-            <Check className="w-3 h-3 stroke-[3]" />
-            <span>READY</span>
-          </span>
-        );
-      case 'checking':
-        return (
-          <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-[0_0_12px_rgba(245,158,11,0.3)] flex items-center gap-1 animate-pulse">
-            <Loader2 className="w-3 h-3 animate-spin" />
-            <span>CHECKING</span>
-          </span>
-        );
-      case 'error':
-        return (
-          <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/40 shadow-[0_0_12px_rgba(244,63,94,0.35)] flex items-center gap-1">
-            <AlertCircle className="w-3 h-3" />
-            <span>ERROR</span>
-          </span>
-        );
-      case 'not_set':
-      default:
-        return (
-          <span className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-800 text-slate-400 border border-slate-700">
-            NOT SET
-          </span>
-        );
+  const renderStatusBadge = (provider: ConnectionProvider) => {
+    const status = verificationStatus[provider];
+    const verified = isVerified[provider];
+
+    if (status === 'checking') {
+      return (
+        <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-[0_0_12px_rgba(245,158,11,0.3)] flex items-center gap-1.5 animate-pulse">
+          <Loader2 className="w-3 h-3 animate-spin" />
+          <span>CHECKING</span>
+        </span>
+      );
     }
+
+    if (status === 'verified' || status === 'saved' || verified) {
+      return (
+        <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.35)] flex items-center gap-1">
+          <Check className="w-3.5 h-3.5 stroke-[3]" />
+          <span>VERIFIED</span>
+        </span>
+      );
+    }
+
+    if (status === 'error') {
+      return (
+        <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/40 shadow-[0_0_12px_rgba(244,63,94,0.35)] flex items-center gap-1">
+          <AlertCircle className="w-3 h-3" />
+          <span>ERROR</span>
+        </span>
+      );
+    }
+
+    const key = cleanApiKey(apiKeys[provider], provider);
+    return (
+      <span className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-800 text-slate-400 border border-slate-700">
+        {key ? 'UNVERIFIED' : 'NOT SET'}
+      </span>
+    );
   };
 
   return (
@@ -295,12 +456,12 @@ export const ConnectionsSettings: React.FC<ConnectionsSettingsProps> = ({
           <div className="px-3 py-1 rounded-full bg-[#050f28] border border-sky-400/50 text-xs font-black text-sky-200 shadow-sm flex items-center gap-2">
             <span
               className={`w-2 h-2 rounded-full ${
-                readyCount > 0
+                verifiedCount > 0
                   ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]'
                   : 'bg-slate-500'
               }`}
             />
-            <span>{readyCount}/৩ সংযুক্ত</span>
+            <span>{verifiedCount}/৩ সংযুক্ত</span>
           </div>
         </div>
       </div>
@@ -309,9 +470,11 @@ export const ConnectionsSettings: React.FC<ConnectionsSettingsProps> = ({
       <div className="space-y-3.5">
         {PROVIDER_CONFIGS.map(({ provider, icon: IconComponent, iconBg, iconColor, borderColor }) => {
           const details = CONNECTION_DETAILS[provider];
-          const state = connectionStates[provider];
-          const rawKey = draftKeys[provider];
-          const isBusy = isVerifying[provider];
+          const rawKey = apiKeys[provider];
+          const isBusy = isTesting[provider];
+          const errorMsg = errorMessages[provider];
+          const verified = isVerified[provider];
+          const status = verificationStatus[provider];
 
           return (
             <div
@@ -336,21 +499,23 @@ export const ConnectionsSettings: React.FC<ConnectionsSettingsProps> = ({
                   </div>
                 </div>
 
-                <div className="shrink-0">{renderStatusBadge(state.status)}</div>
+                <div className="shrink-0">{renderStatusBadge(provider)}</div>
               </div>
 
-              {/* Password Input Field (••••) with Paste button & Eye toggle */}
+              {/* Password Input Field with Paste button & Eye toggle */}
               <div className="relative">
                 <div className="flex items-center bg-[#050c20] border border-sky-900/80 focus-within:border-sky-400 focus-within:shadow-[0_0_15px_rgba(56,189,248,0.25)] rounded-xl px-3 py-1.5 transition-all">
                   <input
                     type={showKeys[provider] ? 'text' : 'password'}
                     value={rawKey}
-                    onChange={(e) =>
-                      setDraftKeys((prev) => ({
-                        ...prev,
-                        [provider]: e.target.value,
-                      }))
-                    }
+                    onChange={(e) => handleKeyChange(provider, e.target.value)}
+                    onPaste={(e) => {
+                      const pasted = e.clipboardData?.getData('text');
+                      if (pasted) {
+                        e.preventDefault();
+                        handleKeyChange(provider, pasted);
+                      }
+                    }}
                     placeholder={details.keyPlaceholder}
                     autoComplete="off"
                     spellCheck="false"
@@ -386,25 +551,32 @@ export const ConnectionsSettings: React.FC<ConnectionsSettingsProps> = ({
                 </div>
 
                 {/* Under input field: Key length & status message */}
-                <div className="flex items-center justify-between text-[11px] mt-1.5 px-1">
-                  <span className="font-mono text-slate-400">
+                <div className="flex items-center justify-between gap-2 text-[11px] mt-1.5 px-1">
+                  <span className="font-mono text-slate-400 shrink-0">
                     Key length:{' '}
-                    <span className="text-sky-300 font-bold">{rawKey.length}</span>
+                    <span className="text-sky-300 font-bold">
+                      {cleanApiKey(rawKey, provider).length}
+                    </span>
                   </span>
 
-                  {state.message && (
-                    <span
-                      className={`text-[10px] font-semibold truncate ${
-                        state.status === 'ready'
-                          ? 'text-emerald-400'
-                          : state.status === 'checking'
-                          ? 'text-amber-300'
-                          : state.status === 'error'
-                          ? 'text-rose-400'
-                          : 'text-slate-400'
-                      }`}
-                    >
-                      {state.message}
+                  {/* Status/Error note */}
+                  {status === 'checking' && (
+                    <span className="text-[10px] font-semibold text-amber-300 flex items-center gap-1 truncate">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      <span>যাচাই করা হচ্ছে...</span>
+                    </span>
+                  )}
+
+                  {status === 'error' && errorMsg && (
+                    <span title={errorMsg} className="text-[10px] font-semibold text-rose-400 truncate">
+                      {errorMsg}
+                    </span>
+                  )}
+
+                  {(status === 'verified' || status === 'saved' || verified) && (
+                    <span className="text-[10px] font-semibold text-emerald-400 flex items-center gap-1 truncate">
+                      <Check className="w-3 h-3 stroke-[3]" />
+                      <span>সফলভাবে যাচাইকৃত (Verified)</span>
                     </span>
                   )}
                 </div>

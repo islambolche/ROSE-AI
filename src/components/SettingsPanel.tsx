@@ -49,7 +49,9 @@ import {
   ChatFontSizeType,
   AgentId,
   UserAddressAsType,
+  RosePrimaryModeId,
   RoseCharacterPresetType,
+  RoseCharacterTraits,
   RoseLanguageStyleType,
   RosePronounType,
   RoseReplyLengthType,
@@ -72,6 +74,11 @@ import {
   settingsService,
   DEFAULT_APP_SETTINGS,
   DEFAULT_ROSE_CHARACTER_SETTINGS,
+  DEFAULT_ROSE_TRAITS,
+  ROSE_MODE_DEFAULT_CONFIG,
+  MODE_TO_PRESET_LABEL,
+  mapPresetToPrimaryMode,
+  sanitizeRoseCharacterConfig,
   DEFAULT_PERMISSION_RULES,
 } from '../services/settings';
 import { ConnectionsSettings } from './ConnectionsSettings';
@@ -81,6 +88,10 @@ import { getTeamDelegationTasks } from '../lib/teamEngine';
 import {
   generateAgentAnswer,
   buildAgentSystemPrompt,
+  buildRoseSystemPrompt,
+  ROSE_PRIMARY_MODES,
+  ROSE_TRAIT_DEFINITIONS,
+  resolveRosePersonalityCombination,
   ROSE_IMMUTABLE_RULES,
   ROSE_PRESET_DESCRIPTIONS,
   ROSE_PRESET_SAMPLES,
@@ -132,13 +143,13 @@ const SETTINGS_MENU_ITEMS: MenuItem[] = [
   {
     id: 'agents',
     title: 'Agents',
-    desc: 'Personality, language, voice, instructions',
+    desc: 'Specialist agents (Mira, Arin, Zayan, Naira)',
     icon: Users,
   },
   {
     id: 'rose-character',
     title: 'Rose Character',
-    desc: 'Soul Bond',
+    desc: 'Dedicated Rose-only personality & traits',
     icon: Sparkles,
   },
   {
@@ -380,13 +391,52 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
   if (!isOpen && !isClosing) return null;
 
+  const getIsolatedRoseConfig = (state: AppSettings): RoseCharacterConfig => {
+    return sanitizeRoseCharacterConfig(
+      state.characterSettings?.rose || state.roseCharacter || DEFAULT_ROSE_CHARACTER_SETTINGS
+    );
+  };
+
+  const applyIsolatedRoseConfig = (
+    nextRose: RoseCharacterConfig,
+    persistImmediately: boolean = false
+  ) => {
+    const cleanRose = sanitizeRoseCharacterConfig(nextRose);
+    setLocalSettings((prev) => {
+      const updated: AppSettings = {
+        ...prev,
+        characterSettings: {
+          rose: cleanRose,
+        },
+        roseCharacter: cleanRose,
+      };
+      if (persistImmediately) {
+        settingsService.saveRoseCharacterSettings(cleanRose);
+        settingsService.saveSettings(updated);
+        onUpdateSettings(updated);
+      }
+      return updated;
+    });
+  };
+
   const handleSave = () => {
-    settingsService.saveSettings(localSettings);
-    onUpdateSettings(localSettings);
+    const cleanRose = getIsolatedRoseConfig(localSettings);
+    const syncedSettings: AppSettings = {
+      ...localSettings,
+      characterSettings: {
+        rose: cleanRose,
+      },
+      roseCharacter: cleanRose,
+    };
+    settingsService.saveRoseCharacterSettings(cleanRose);
+    settingsService.saveSettings(syncedSettings);
+    setLocalSettings(syncedSettings);
+    onUpdateSettings(syncedSettings);
     if (activeScreen === 'rose-character') {
-      const charName =
-        localSettings.roseCharacter?.preset || DEFAULT_ROSE_CHARACTER_SETTINGS.preset;
-      onRoseCharacterSaved?.(charName);
+      const modeDef =
+        ROSE_PRIMARY_MODES[cleanRose.activeMode] ||
+        ROSE_PRIMARY_MODES.emotional_caring;
+      onRoseCharacterSaved?.(modeDef.name || cleanRose.preset);
     }
     setShowSavedFeedback(true);
     onToast('Settings saved');
@@ -400,6 +450,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     field: K,
     val: AppSettings['agents'][AgentId][K]
   ) => {
+    // Prevent generic agent personality/instruction edits from ever touching Rose's isolated character
+    if (agentId === 'rose' && (field === 'personality' || field === 'customInstructions')) {
+      return;
+    }
     setLocalSettings((prev) => ({
       ...prev,
       agents: {
@@ -416,21 +470,138 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     field: K,
     val: RoseCharacterConfig[K]
   ) => {
-    setLocalSettings((prev) => ({
-      ...prev,
-      roseCharacter: {
-        ...(prev.roseCharacter || DEFAULT_ROSE_CHARACTER_SETTINGS),
-        [field]: val,
-      },
-    }));
+    const current = getIsolatedRoseConfig(localSettings);
+    const updated: RoseCharacterConfig = {
+      ...current,
+      [field]: val,
+    };
+
+    // Keep traits and fine-tuning sliders/buttons aligned when user adjusts speech controls
+    if (field === 'replyLength') {
+      updated.traits = {
+        ...(current.traits || DEFAULT_ROSE_TRAITS),
+        conciseResponses: val === 'ছোট',
+        detailedResponses: val === 'মাঝারি',
+      };
+    } else if (field === 'languageStyle') {
+      updated.traits = {
+        ...(current.traits || DEFAULT_ROSE_TRAITS),
+        formalLanguage: val === 'শুদ্ধ বাংলা',
+        casualBengaliLanguage: val === 'কথ্য বাংলা' || val === 'বাংলা-ইংরেজি মিশ্র',
+      };
+    } else if (field === 'emotionLevel') {
+      const numVal = Number(val);
+      updated.traits = {
+        ...(current.traits || DEFAULT_ROSE_TRAITS),
+        emotionalSensitivity: numVal >= 4,
+      };
+    } else if (field === 'humorLevel') {
+      const numVal = Number(val);
+      updated.traits = {
+        ...(current.traits || DEFAULT_ROSE_TRAITS),
+        humor: numVal >= 5,
+      };
+    }
+
+    applyIsolatedRoseConfig(updated, false);
+  };
+
+  const handleSelectRosePrimaryMode = (modeId: RosePrimaryModeId) => {
+    const current = getIsolatedRoseConfig(localSettings);
+    const modeDefaults = ROSE_MODE_DEFAULT_CONFIG[modeId];
+    const nextRose: RoseCharacterConfig = {
+      ...current,
+      activeMode: modeId,
+      preset: MODE_TO_PRESET_LABEL[modeId] || current.preset,
+      languageStyle: modeDefaults.languageStyle,
+      pronoun: modeDefaults.pronoun,
+      emotionLevel: modeDefaults.emotionLevel,
+      humorLevel: modeDefaults.humorLevel,
+      replyLength: modeDefaults.replyLength,
+      useEmoji: modeDefaults.useEmoji,
+      traits: { ...modeDefaults.traits },
+    };
+    applyIsolatedRoseConfig(nextRose, true);
+  };
+
+  const handleSelectRoseBengaliPreset = (presetId: RoseCharacterPresetType) => {
+    const current = getIsolatedRoseConfig(localSettings);
+    const mappedMode = mapPresetToPrimaryMode(presetId);
+    const modeDefaults = ROSE_MODE_DEFAULT_CONFIG[mappedMode];
+    const nextRose: RoseCharacterConfig = {
+      ...current,
+      activeMode: mappedMode,
+      preset: presetId,
+      languageStyle: modeDefaults.languageStyle,
+      pronoun: modeDefaults.pronoun,
+      emotionLevel: modeDefaults.emotionLevel,
+      humorLevel: modeDefaults.humorLevel,
+      replyLength: modeDefaults.replyLength,
+      useEmoji: modeDefaults.useEmoji,
+      traits: { ...modeDefaults.traits },
+    };
+    applyIsolatedRoseConfig(nextRose, true);
+  };
+
+  const handleToggleRoseTrait = (traitKey: keyof RoseCharacterTraits) => {
+    const current = getIsolatedRoseConfig(localSettings);
+    const currentTraits = current.traits || { ...DEFAULT_ROSE_TRAITS };
+    const nextVal = !currentTraits[traitKey];
+    const nextTraits: RoseCharacterTraits = {
+      ...currentTraits,
+      [traitKey]: nextVal,
+    };
+
+    const nextRose: RoseCharacterConfig = {
+      ...current,
+      traits: nextTraits,
+    };
+
+    // Deterministic mutual-exclusion and slider synchronization
+    if (traitKey === 'conciseResponses' && nextVal) {
+      nextTraits.detailedResponses = false;
+      nextRose.replyLength = 'ছোট';
+    } else if (traitKey === 'detailedResponses' && nextVal) {
+      nextTraits.conciseResponses = false;
+      nextRose.replyLength = 'মাঝারি';
+    } else if (traitKey === 'formalLanguage' && nextVal) {
+      nextTraits.casualBengaliLanguage = false;
+      nextRose.languageStyle = 'শুদ্ধ বাংলা';
+      nextRose.pronoun = 'আপনি';
+    } else if (traitKey === 'casualBengaliLanguage' && nextVal) {
+      nextTraits.formalLanguage = false;
+      nextRose.languageStyle = 'কথ্য বাংলা';
+    } else if (traitKey === 'emotionalSensitivity') {
+      if (!nextVal && nextRose.emotionLevel > 3) {
+        nextRose.emotionLevel = 3;
+      } else if (nextVal && nextRose.emotionLevel < 5) {
+        nextRose.emotionLevel = 7;
+      }
+    } else if (traitKey === 'humor') {
+      if (!nextVal && nextRose.humorLevel > 3) {
+        nextRose.humorLevel = 2;
+      } else if (nextVal && nextRose.humorLevel < 5) {
+        nextRose.humorLevel = 6;
+      }
+    }
+
+    applyIsolatedRoseConfig(nextRose, true);
   };
 
   const handleResetRoseCharacter = () => {
+    const resetRose: RoseCharacterConfig = {
+      ...DEFAULT_ROSE_CHARACTER_SETTINGS,
+      traits: { ...DEFAULT_ROSE_TRAITS },
+    };
     const resetSettings: AppSettings = {
       ...localSettings,
-      roseCharacter: { ...DEFAULT_ROSE_CHARACTER_SETTINGS },
+      characterSettings: {
+        rose: resetRose,
+      },
+      roseCharacter: resetRose,
     };
     setLocalSettings(resetSettings);
+    settingsService.saveRoseCharacterSettings(resetRose);
     settingsService.saveSettings(resetSettings);
     onUpdateSettings(resetSettings);
     onRoseCharacterSaved?.(DEFAULT_ROSE_CHARACTER_SETTINGS.preset);
@@ -450,8 +621,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         text: roseTestInput.trim(),
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
-      const currentRoseChar =
-        localSettings.roseCharacter || DEFAULT_ROSE_CHARACTER_SETTINGS;
+      const currentRoseChar = getIsolatedRoseConfig(localSettings);
+      const activeModeDef =
+        ROSE_PRIMARY_MODES[currentRoseChar.activeMode] ||
+        ROSE_PRIMARY_MODES.emotional_caring;
       const res = await generateAgentAnswer('rose', [testMsg], {
         roseCharacterOverride: currentRoseChar,
       });
@@ -462,7 +635,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         subtext: res.errorMeta?.subtext,
         model: res.model,
         provider: res.provider,
-        character: currentRoseChar.preset,
+        character: `${activeModeDef.name} (${currentRoseChar.preset})`,
       });
     } catch {
       setRoseTestOutput({
@@ -475,6 +648,12 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   };
 
   const activeMenuItem = SETTINGS_MENU_ITEMS.find((item) => item.id === activeScreen);
+  const currentRoseMenuSummary = (() => {
+    const rc = getIsolatedRoseConfig(localSettings);
+    const modeDef =
+      ROSE_PRIMARY_MODES[rc.activeMode] || ROSE_PRIMARY_MODES.emotional_caring;
+    return `${modeDef.name} • ${rc.preset}`;
+  })();
 
   return (
     <div
@@ -581,7 +760,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                               localSettings.aiModel?.selectedChatModelId ||
                               'openai/gpt-oss-120b'
                             : item.id === 'rose-character'
-                            ? localSettings.roseCharacter?.preset || 'Soul Bond'
+                            ? currentRoseMenuSummary
                             : item.desc}
                         </p>
                       </div>
@@ -752,18 +931,19 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           )}
 
           {/* ========================================================= */}
-          {/* 3. AGENTS SUB-SCREEN (READ-ONLY ID, EDITABLE CONFIG)      */}
+          {/* 3. AGENTS SUB-SCREEN (SPECIALIST AGENTS ONLY + ROSE VOICE) */}
           {/* ========================================================= */}
           {activeScreen === 'agents' && (
             <div className="space-y-4 animate-in fade-in duration-150">
               <div className="p-3 rounded-xl bg-sky-950/40 border border-sky-800/40 text-[11px] text-sky-200">
-                Agent identities, names, roles and photos are permanently locked. You can configure behavior, personality, language, and custom instructions below.
+                Configure your four specialist agents (Mira, Arin, Zayan, Naira) and voice IDs. Rose's personality is strictly isolated inside the dedicated <strong>Rose Character</strong> panel.
               </div>
 
               <div className="space-y-4">
                 {IDENTITY_AGENTS.map((ident) => {
                   const cfg =
                     localSettings.agents[ident.id] || DEFAULT_APP_SETTINGS.agents[ident.id];
+                  const isRose = ident.id === 'rose';
 
                   return (
                     <div
@@ -777,7 +957,6 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                       {/* Read-Only Identity Card Header */}
                       <div className="flex items-center justify-between pb-3 border-b border-sky-950/80">
                         <div className="flex items-center gap-3">
-                          {/* 48px Circular Locked Avatar */}
                           <div
                             className="relative w-12 h-12 rounded-full overflow-hidden border-2 shrink-0 bg-[#071126] flex items-center justify-center"
                             style={{
@@ -827,89 +1006,111 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                         </div>
                       </div>
 
-                      {/* Modifiable: Personality & Language Dropdowns */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div className="space-y-1">
-                          <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
-                            Personality
-                          </label>
-                          <select
-                            value={cfg.personality}
-                            onChange={(e) =>
-                              handleAgentConfigChange(
-                                ident.id,
-                                'personality',
-                                e.target.value as PersonalityType
-                              )
-                            }
-                            className="w-full px-2.5 py-1.5 rounded-xl bg-[#050c20] border border-sky-500/30 text-white text-xs font-semibold focus:outline-none focus:border-sky-400"
-                          >
-                            {PERSONALITY_OPTIONS.map((p) => (
-                              <option key={p} value={p}>
-                                {p}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div className="space-y-1">
-                          <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
-                            Language
-                          </label>
-                          <select
-                            value={cfg.language}
-                            onChange={(e) =>
-                              handleAgentConfigChange(
-                                ident.id,
-                                'language',
-                                e.target.value as LanguageType
-                              )
-                            }
-                            className="w-full px-2.5 py-1.5 rounded-xl bg-[#050c20] border border-sky-500/30 text-white text-xs font-semibold focus:outline-none focus:border-sky-400"
-                          >
-                            {LANGUAGE_OPTIONS.map((l) => (
-                              <option key={l} value={l}>
-                                {l}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-
-                      {/* Modifiable: Response Style Segment */}
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
-                          Response Style
-                        </label>
-                        <div className="flex items-center gap-1 bg-[#050c20] p-1 rounded-xl border border-sky-500/30 max-w-xs">
+                      {isRose ? (
+                        <div className="p-3 rounded-xl bg-rose-950/30 border border-rose-500/30 flex items-center justify-between gap-3">
+                          <div className="space-y-0.5">
+                            <p className="text-[11px] font-extrabold text-rose-200">
+                              Isolated Rose Character Configuration
+                            </p>
+                            <p className="text-[10px] text-slate-300">
+                              Rose's personality modes, traits, and instructions are managed exclusively in <span className="font-mono text-rose-300">characterSettings.rose</span>.
+                            </p>
+                          </div>
                           <button
                             type="button"
-                            onClick={() =>
-                              handleAgentConfigChange(ident.id, 'responseStyle', 'brief')
-                            }
-                            className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-all ${
-                              cfg.responseStyle === 'brief'
-                                ? 'bg-sky-500 text-white shadow-sm'
-                                : 'text-slate-400 hover:text-white'
-                            }`}
+                            onClick={() => setActiveScreen('rose-character')}
+                            className="px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/50 text-rose-200 text-[10px] font-extrabold whitespace-nowrap transition-all"
                           >
-                            সংক্ষিপ্ত (Brief)
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleAgentConfigChange(ident.id, 'responseStyle', 'detailed')
-                            }
-                            className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-all ${
-                              cfg.responseStyle === 'detailed'
-                                ? 'bg-sky-500 text-white shadow-sm'
-                                : 'text-slate-400 hover:text-white'
-                            }`}
-                          >
-                            বিস্তারিত (Detailed)
+                            Open Rose Character
                           </button>
                         </div>
-                      </div>
+                      ) : (
+                        <>
+                          {/* Modifiable: Personality & Language Dropdowns (only for Mira, Arin, Zayan, Naira) */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
+                                Personality
+                              </label>
+                              <select
+                                value={cfg.personality}
+                                onChange={(e) =>
+                                  handleAgentConfigChange(
+                                    ident.id,
+                                    'personality',
+                                    e.target.value as PersonalityType
+                                  )
+                                }
+                                className="w-full px-2.5 py-1.5 rounded-xl bg-[#050c20] border border-sky-500/30 text-white text-xs font-semibold focus:outline-none focus:border-sky-400"
+                              >
+                                {PERSONALITY_OPTIONS.map((p) => (
+                                  <option key={p} value={p}>
+                                    {p}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
+                                Language
+                              </label>
+                              <select
+                                value={cfg.language}
+                                onChange={(e) =>
+                                  handleAgentConfigChange(
+                                    ident.id,
+                                    'language',
+                                    e.target.value as LanguageType
+                                  )
+                                }
+                                className="w-full px-2.5 py-1.5 rounded-xl bg-[#050c20] border border-sky-500/30 text-white text-xs font-semibold focus:outline-none focus:border-sky-400"
+                              >
+                                {LANGUAGE_OPTIONS.map((l) => (
+                                  <option key={l} value={l}>
+                                    {l}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          {/* Modifiable: Response Style Segment */}
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
+                              Response Style
+                            </label>
+                            <div className="flex items-center gap-1 bg-[#050c20] p-1 rounded-xl border border-sky-500/30 max-w-xs">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleAgentConfigChange(ident.id, 'responseStyle', 'brief')
+                                }
+                                className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-all ${
+                                  cfg.responseStyle === 'brief'
+                                    ? 'bg-sky-500 text-white shadow-sm'
+                                    : 'text-slate-400 hover:text-white'
+                                }`}
+                              >
+                                সংক্ষিপ্ত (Brief)
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleAgentConfigChange(ident.id, 'responseStyle', 'detailed')
+                                }
+                                className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-all ${
+                                  cfg.responseStyle === 'detailed'
+                                    ? 'bg-sky-500 text-white shadow-sm'
+                                    : 'text-slate-400 hover:text-white'
+                                }`}
+                              >
+                                বিস্তারিত (Detailed)
+                              </button>
+                            </div>
+                          </div>
+                        </>
+                      )}
 
                       {/* ElevenLabs Voice ID & Preview */}
                       <div className="space-y-1 pt-1">
@@ -945,21 +1146,23 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                         </div>
                       </div>
 
-                      {/* Modifiable: Custom Instructions */}
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
-                          Custom Instructions (কাস্টম নির্দেশনা)
-                        </label>
-                        <textarea
-                          rows={2}
-                          value={cfg.customInstructions}
-                          onChange={(e) =>
-                            handleAgentConfigChange(ident.id, 'customInstructions', e.target.value)
-                          }
-                          placeholder={`Instructions for ${ident.name}...`}
-                          className="w-full px-3 py-1.5 rounded-xl bg-[#050c20] border border-sky-500/30 text-white text-xs focus:outline-none focus:border-sky-400 transition-all resize-none"
-                        />
-                      </div>
+                      {/* Modifiable: Custom Instructions (only for specialist agents) */}
+                      {!isRose && (
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
+                            Custom Instructions (কাস্টম নির্দেশনা)
+                          </label>
+                          <textarea
+                            rows={2}
+                            value={cfg.customInstructions}
+                            onChange={(e) =>
+                              handleAgentConfigChange(ident.id, 'customInstructions', e.target.value)
+                            }
+                            placeholder={`Instructions for ${ident.name}...`}
+                            className="w-full px-3 py-1.5 rounded-xl bg-[#050c20] border border-sky-500/30 text-white text-xs focus:outline-none focus:border-sky-400 transition-all resize-none"
+                          />
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -979,27 +1182,22 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           )}
 
           {/* ========================================================= */}
-          {/* ROSE CHARACTER SUB-SCREEN (ONLY FOR ROSE)                 */}
+          {/* ROSE CHARACTER SUB-SCREEN (ISOLATED: ONLY FOR ROSE)       */}
           {/* ========================================================= */}
           {activeScreen === 'rose-character' &&
             (() => {
-              const rc =
-                localSettings.roseCharacter || DEFAULT_ROSE_CHARACTER_SETTINGS;
+              const rc = getIsolatedRoseConfig(localSettings);
               const roseIdent = IDENTITY_AGENTS_MAP.rose;
               const charLen = (rc.customCharacter || '').length;
               const resolvedModel = resolveRoseModelChoice(localSettings, rc);
-              const activePromptText = buildAgentSystemPrompt(
-                'rose',
-                rc,
-                undefined,
-                localSettings
-              );
+              const activePromptText = buildRoseSystemPrompt(rc, undefined, localSettings);
+              const resolvedCombo = resolveRosePersonalityCombination(rc);
+              const activePrimaryMode = resolvedCombo.modeDef;
               const presetDesc =
-                ROSE_PRESET_DESCRIPTIONS[rc.preset] ||
-                ROSE_PRESET_DESCRIPTIONS['Soul Bond'];
+                ROSE_PRESET_DESCRIPTIONS[rc.preset] || activePrimaryMode.instructions;
               const presetSamples =
-                ROSE_PRESET_SAMPLES[rc.preset] || ROSE_PRESET_SAMPLES['Soul Bond'];
-              const roseTemp = getRoseTemperature(rc.preset);
+                ROSE_PRESET_SAMPLES[rc.preset] || activePrimaryMode.samples;
+              const roseTemp = getRoseTemperature(rc.preset, rc);
 
               const modelChoices: Array<{
                 id: RoseModelChoiceType;
@@ -1034,7 +1232,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
               return (
                 <div className="space-y-4 animate-in fade-in duration-150">
-                  {/* Top Rose Banner */}
+                  {/* 1. Rose Identity & Complete Isolation Banner */}
                   <div className="p-3.5 rounded-2xl bg-[#081533] border border-rose-500/40 flex items-center gap-3 shadow-[0_0_20px_rgba(244,63,94,0.15)]">
                     <div
                       className="w-12 h-12 rounded-full overflow-hidden border-2 shrink-0 bg-[#071126]"
@@ -1055,45 +1253,64 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                           Rose Character
                         </h4>
                         <span className="px-2 py-0.5 rounded-md bg-rose-500/20 border border-rose-400/40 text-[10px] font-bold text-rose-300">
-                          {rc.preset}
+                          {activePrimaryMode.name}
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-400/30 text-[10px] font-mono text-emerald-300">
+                          characterSettings.rose
                         </span>
                         <span className="px-2 py-0.5 rounded-md bg-sky-500/15 border border-sky-400/30 text-[10px] font-mono text-sky-300">
                           Temp: {roseTemp}
                         </span>
                       </div>
                       <p className="text-[11px] text-slate-300 mt-0.5">
-                        শুধু Rose-এর চরিত্র ও কথা বলার ধরন (বাকি ৪ এজেন্ট অপরিবর্তিত থাকবে)
+                        Dedicated Rose-only configuration — strictly isolated from all other characters.
                       </p>
                     </div>
                   </div>
 
-                  {/* ক) চরিত্র বাছাই (একটা নির্বাচিত, টিক চিহ্নসহ কার্ড) */}
+                  {/* 2. Primary Personality Mode Selector (Only ONE Primary Mode Active at a Time) */}
                   <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-3">
-                    <label className="text-xs font-extrabold text-white block">
-                      ক) চরিত্র বাছাই (Character Preset)
-                    </label>
-                    <div className="grid grid-cols-2 gap-2.5">
-                      {ROSE_CHARACTER_PRESET_CARDS.map((card) => {
-                        const isSelected = rc.preset === card.id;
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <label className="text-xs font-extrabold text-white block">
+                          1) Primary Personality Mode (মূল ব্যক্তিত্ব মোড)
+                        </label>
+                        <p className="text-[10px] text-slate-400 mt-0.5">
+                          Only ONE primary mode is active at a time. Selecting a mode immediately updates Rose's tone & traits.
+                        </p>
+                      </div>
+                      <span className="px-2 py-0.5 rounded-lg bg-rose-500/20 border border-rose-400/40 text-[10px] font-extrabold text-rose-300 shrink-0">
+                        1 Active Mode
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {Object.values(ROSE_PRIMARY_MODES).map((mode) => {
+                        const isSelected = rc.activeMode === mode.id;
                         return (
                           <button
-                            key={card.id}
+                            key={mode.id}
                             type="button"
-                            onClick={() => handleRoseCharacterChange('preset', card.id)}
+                            onClick={() => handleSelectRosePrimaryMode(mode.id)}
                             className={`p-3 rounded-xl border text-left transition-all flex items-start justify-between gap-2 ${
                               isSelected
                                 ? 'bg-rose-500/20 border-rose-400 text-white shadow-[0_0_14px_rgba(244,63,94,0.3)]'
                                 : 'bg-[#050c20] border-slate-800 text-slate-300 hover:border-sky-500/40 hover:text-white'
                             }`}
                           >
-                            <div className="min-w-0">
-                              <p className="text-xs font-extrabold truncate">{card.label}</p>
-                              <p className="text-[10px] text-slate-400 truncate mt-0.5">
-                                {card.subtitle}
+                            <div className="min-w-0 space-y-0.5">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <p className="text-xs font-extrabold truncate">{mode.name}</p>
+                              </div>
+                              <p className="text-[10px] text-rose-300/90 font-semibold truncate">
+                                {mode.bengaliName}
+                              </p>
+                              <p className="text-[10px] text-slate-400 line-clamp-2 leading-snug pt-0.5">
+                                {mode.shortDesc}
                               </p>
                             </div>
                             {isSelected && (
-                              <div className="w-5 h-5 rounded-full bg-rose-500 text-white flex items-center justify-center shrink-0">
+                              <div className="w-5 h-5 rounded-full bg-rose-500 text-white flex items-center justify-center shrink-0 mt-0.5">
                                 <Check className="w-3 h-3" />
                               </div>
                             )}
@@ -1102,16 +1319,48 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                       })}
                     </div>
 
-                    {/* নির্বাচিত প্রিসেটের বর্ণনা ও নমুনা সংলাপ */}
+                    {/* Bengali Sub-Presets (Backward-compatible quick flavors) */}
+                    <div className="pt-2 border-t border-sky-950/80 space-y-2">
+                      <span className="text-[11px] font-bold text-sky-300 block">
+                        বাংলা বিশেষ প্রিসেট ও আবহ (Bengali Character Flavors):
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {ROSE_CHARACTER_PRESET_CARDS.map((card) => {
+                          const isPresetSelected = rc.preset === card.id;
+                          return (
+                            <button
+                              key={card.id}
+                              type="button"
+                              onClick={() => handleSelectRoseBengaliPreset(card.id)}
+                              title={card.subtitle}
+                              className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold transition-all flex items-center gap-1.5 ${
+                                isPresetSelected
+                                  ? 'bg-rose-500/25 border-rose-400 text-white shadow-[0_0_10px_rgba(244,63,94,0.25)]'
+                                  : 'bg-[#050c20] border-slate-800 text-slate-300 hover:border-sky-500/40 hover:text-white'
+                              }`}
+                            >
+                              <span>{card.label}</span>
+                              {isPresetSelected && <Check className="w-3 h-3 text-rose-300" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Active Mode & Preset Details + Sample Dialogue */}
                     <div className="p-3 rounded-xl bg-[#050c20] border border-rose-500/30 space-y-2 select-text">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between flex-wrap gap-1">
                         <span className="text-[11px] font-extrabold text-rose-300">
-                          নির্বাচিত প্রিসেট: {rc.preset}
+                          Active Mode: {activePrimaryMode.name} ({rc.preset})
                         </span>
                         <span className="text-[10px] text-slate-400 font-mono">
-                          Temperature: {roseTemp}
+                          Intensity: {activePrimaryMode.emotionalIntensity} • Temp: {roseTemp}
                         </span>
                       </div>
+                      <p className="text-[10px] text-sky-200/90">
+                        <strong>Tone:</strong> {activePrimaryMode.tone} | <strong>Style:</strong>{' '}
+                        {activePrimaryMode.responseStyle}
+                      </p>
                       {presetDesc && (
                         <p className="text-[11px] text-slate-200 leading-relaxed">
                           {presetDesc}
@@ -1134,11 +1383,103 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     </div>
                   </div>
 
-                  {/* খ) Custom character (বড় টেক্সট বাক্স, সর্বোচ্চ ১৫০০ অক্ষর, গণনা দেখাও) */}
+                  {/* 3. Character Trait On/Off Switches (Multiple Settings with On/Off Controls) */}
+                  <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <label className="text-xs font-extrabold text-white block">
+                          2) Character Trait On/Off Switches (চরিত্রের বৈশিষ্ট্য চালু/বন্ধ)
+                        </label>
+                        <p className="text-[10px] text-slate-400 mt-0.5">
+                          Fine-tune how Rose behaves within her selected primary mode. Enabled traits are combined by priority.
+                        </p>
+                      </div>
+                      <span className="px-2 py-0.5 rounded-lg bg-sky-500/20 border border-sky-400/40 text-[10px] font-mono font-bold text-sky-300 shrink-0">
+                        {resolvedCombo.enabledTraitLabels.length} ON
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {ROSE_TRAIT_DEFINITIONS.map((trait) => {
+                        const isEnabled = Boolean(rc.traits?.[trait.key]);
+                        return (
+                          <div
+                            key={trait.key}
+                            onClick={() => handleToggleRoseTrait(trait.key)}
+                            className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2.5 ${
+                              isEnabled
+                                ? 'bg-sky-950/50 border-sky-400/60 text-white shadow-[0_0_12px_rgba(56,189,248,0.15)]'
+                                : 'bg-[#050c20] border-slate-800/90 text-slate-400 hover:border-slate-700'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[11px] font-extrabold text-white truncate">
+                                  {trait.label}
+                                </span>
+                              </div>
+                              <span className="text-[10px] text-sky-300/80 block truncate">
+                                {trait.bengaliLabel}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <span
+                                className={`text-[9px] font-mono font-extrabold px-1.5 py-0.5 rounded ${
+                                  isEnabled
+                                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40'
+                                    : 'bg-slate-800 text-slate-400'
+                                }`}
+                              >
+                                {isEnabled ? 'ON' : 'OFF'}
+                              </span>
+                              <div
+                                className={`w-9 h-5 rounded-full relative transition-colors ${
+                                  isEnabled ? 'bg-emerald-500' : 'bg-slate-800'
+                                }`}
+                              >
+                                <div
+                                  className={`w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform ${
+                                    isEnabled ? 'translate-x-4.5' : 'translate-x-0.5'
+                                  }`}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Priority Combination Summary */}
+                    <div className="p-3 rounded-xl bg-[#050c20] border border-sky-500/30 space-y-1.5 text-[10px]">
+                      <div className="flex items-center justify-between text-sky-300 font-bold">
+                        <span>Active Personality Combination (Priority System)</span>
+                        <span className="font-mono">Mode + {resolvedCombo.enabledTraitLabels.length} Traits</span>
+                      </div>
+                      <p className="text-slate-300 leading-relaxed">
+                        <strong>Primary Mode:</strong> {activePrimaryMode.name} ({activePrimaryMode.bengaliName})
+                      </p>
+                      <p className="text-slate-300 leading-relaxed">
+                        <strong>Enabled Traits:</strong>{' '}
+                        {resolvedCombo.enabledTraitLabels.length > 0
+                          ? resolvedCombo.enabledTraitLabels.join(', ')
+                          : 'None (Primary mode defaults only)'}
+                      </p>
+                      {resolvedCombo.disabledOverrideInstructions.length > 0 && (
+                        <div className="pt-1 border-t border-slate-800 text-amber-300 space-y-0.5">
+                          {resolvedCombo.disabledOverrideInstructions.map((note, idx) => (
+                            <p key={idx}>{note}</p>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 4. Custom character (বড় টেক্সট বাক্স, সর্বোচ্চ ১৫০০ অক্ষর, গণনা দেখাও) */}
                   <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-2">
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-extrabold text-white">
-                        খ) Custom Character (কাস্টম চরিত্র / অতিরিক্ত নির্দেশ)
+                        3) Custom Character Instructions (কাস্টম চরিত্র / অতিরিক্ত নির্দেশ)
                       </label>
                       <span
                         className={`text-[10px] font-mono font-bold ${
@@ -1149,12 +1490,12 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                       </span>
                     </div>
                     <p className="text-[10px] text-slate-400">
-                      {rc.preset === 'Custom'
+                      {rc.activeMode === 'custom' || rc.preset === 'Custom'
                         ? 'Custom বাছা আছে: এই লেখাই Rose-এর মূল চরিত্র হিসেবে কাজ করবে।'
-                        : `${rc.preset} বাছা আছে: এই লেখা অতিরিক্ত নির্দেশ হিসেবে প্রিসেটের সাথে যোগ হবে (খালি রাখা যাবে)।`}
+                        : `${activePrimaryMode.name} বাছা আছে: এই লেখা অতিরিক্ত নির্দেশ হিসেবে প্রিসেটের সাথে যোগ হবে (খালি রাখা যাবে)।`}
                     </p>
                     <textarea
-                      rows={4}
+                      rows={3}
                       maxLength={1500}
                       value={rc.customCharacter}
                       onChange={(e) =>
@@ -1168,10 +1509,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     />
                   </div>
 
-                  {/* গ) কথার ধরন */}
+                  {/* 5. Emotional Intensity & Speech Fine-Tuning */}
                   <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-4">
                     <label className="text-xs font-extrabold text-white block">
-                      গ) কথার ধরন (Speech & Tone)
+                      4) Emotional Intensity & Speech Controls (আবেগের মাত্রা ও কথার ধরন)
                     </label>
 
                     {/* ভাষার রূপ */}
@@ -1230,7 +1571,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
                       <div className="space-y-1.5">
                         <div className="flex items-center justify-between">
-                          <span className="text-[11px] font-bold text-slate-300">আবেগ</span>
+                          <span className="text-[11px] font-bold text-slate-300">
+                            Emotional Intensity (আবেগ)
+                          </span>
                           <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-mono text-[11px] font-bold">
                             {rc.emotionLevel} / 10
                           </span>
@@ -1250,7 +1593,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
                       <div className="space-y-1.5">
                         <div className="flex items-center justify-between">
-                          <span className="text-[11px] font-bold text-slate-300">রসিকতা</span>
+                          <span className="text-[11px] font-bold text-slate-300">
+                            Humor Level (রসিকতা)
+                          </span>
                           <span className="px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 font-mono text-[11px] font-bold">
                             {rc.humorLevel} / 10
                           </span>
@@ -1318,10 +1663,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     </div>
                   </div>
 
-                  {/* ঘ) ডাকনাম */}
+                  {/* 6. ডাকনাম */}
                   <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-2">
                     <label className="text-xs font-extrabold text-white block">
-                      ঘ) ডাকনাম (Rose আপনাকে কী নামে ডাকবে)
+                      5) ডাকনাম (Rose আপনাকে কী নামে ডাকবে)
                     </label>
                     <p className="text-[10px] text-slate-400">
                       খালি থাকলে নমুনা সংলাপ থেকে ওই শব্দ বাদ যাবে এবং Voice & Language-এর নাম ({localSettings.userName || 'খালি'}) ব্যবহার করবে।
@@ -1335,11 +1680,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     />
                   </div>
 
-                  {/* ঙ) Rose-এর জন্য মডেল বাছাই (শুধু Rose-এর উত্তরে প্রযোজ্য) */}
+                  {/* 7. Rose-এর জন্য মডেল বাছাই (শুধু Rose-এর উত্তরে প্রযোজ্য) */}
                   <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-2.5">
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-extrabold text-white">
-                        ঙ) Rose-এর জন্য মডেল বাছাই
+                        6) Rose-এর জন্য মডেল বাছাই
                       </label>
                       <span className="text-[10px] text-sky-300 font-bold">
                         শুধু Rose-এর উত্তরে প্রযোজ্য
@@ -1374,7 +1719,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     </div>
                   </div>
 
-                  {/* চ) Show active prompt (ভাঁজ-হওয়া অংশ, শুধু পড়ার জন্য) */}
+                  {/* 8. Show active prompt (ভাঁজ-হওয়া অংশ, শুধু পড়ার জন্য) */}
                   <div className="rounded-2xl bg-[#081533] border border-sky-900/70 overflow-hidden">
                     <button
                       type="button"
@@ -1388,18 +1733,18 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                           <ChevronRight className="w-4 h-4 text-sky-400 shrink-0" />
                         )}
                         <span className="text-xs font-extrabold text-white">
-                          Show active prompt
+                          Show active Rose system prompt
                         </span>
                       </div>
                       <span className="text-[10px] font-bold text-rose-300 bg-rose-500/15 border border-rose-400/30 px-2.5 py-1 rounded-lg truncate">
-                        চরিত্র: {rc.preset}, মডেল: {resolvedModel.model}
+                        {activePrimaryMode.name} • {resolvedModel.model}
                       </span>
                     </button>
 
                     {showActivePrompt && (
                       <div className="p-3.5 pt-0 border-t border-sky-900/50 space-y-2">
                         <p className="text-[10px] text-slate-400 pt-2">
-                          এই মুহূর্তে Rose-কে যে সম্পূর্ণ system prompt যাচ্ছে (শুধু পড়ার জন্য):
+                          এই মুহূর্তে <span className="font-mono text-rose-300">characterSettings.rose</span> থেকে Rose-কে যে সম্পূর্ণ ডায়নামিক system prompt যাচ্ছে:
                         </p>
                         <textarea
                           readOnly
@@ -1411,11 +1756,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     )}
                   </div>
 
-                  {/* ছ) টেস্ট বাক্স */}
+                  {/* 9. টেস্ট বাক্স */}
                   <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-3">
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-extrabold text-white">
-                        ছ) টেস্ট বাক্স (সেভ করার আগে পরীক্ষা করুন)
+                        7) টেস্ট বাক্স (সেভ করার আগে পরীক্ষা করুন)
                       </label>
                       <span className="text-[10px] text-slate-400">চ্যাটে সেভ হবে না</span>
                     </div>
@@ -1453,7 +1798,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                       >
                         <div className="flex items-center justify-between flex-wrap gap-1">
                           <span className="text-[11px] font-extrabold text-rose-300">
-                            চরিত্র: {roseTestOutput.character || rc.preset} • মডেল:{' '}
+                            চরিত্র: {roseTestOutput.character || activePrimaryMode.name} • মডেল:{' '}
                             {roseTestOutput.model || resolvedModel.model}
                           </span>
                           {roseTestOutput.emotion && !roseTestOutput.isError && (
@@ -1474,14 +1819,14 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     )}
                   </div>
 
-                  {/* জ) "Save" ও "Reset to default" বাটন */}
+                  {/* 10. "Save" ও "Reset Rose settings" বাটন */}
                   <div className="flex items-center gap-2.5 pt-1">
                     <button
                       type="button"
                       onClick={handleResetRoseCharacter}
                       className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs border border-slate-700 transition-all"
                     >
-                      Reset to default
+                      Reset Rose settings
                     </button>
                     <button
                       type="button"
@@ -1489,11 +1834,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                       className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-sky-500 hover:from-rose-500 hover:to-sky-400 text-white font-extrabold text-xs flex items-center justify-center gap-2 border border-sky-400/50 shadow-[0_0_15px_rgba(244,63,94,0.35)] transition-all"
                     >
                       <Check className="w-4 h-4" />
-                      <span>Save</span>
+                      <span>Save Rose Settings</span>
                     </button>
                   </div>
 
-                  {/* ঝ) নিচে ধূসর কার্ডে "সবসময় প্রযোজ্য নিয়ম (বদলানো যায় না)" তালিকা */}
+                  {/* 11. নিচে ধূসর কার্ডে "সবসময় প্রযোজ্য নিয়ম (বদলানো যায় না)" তালিকা */}
                   <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-700/70 space-y-2 text-slate-300 select-text">
                     <div className="flex items-center gap-2 text-xs font-extrabold text-slate-200">
                       <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
