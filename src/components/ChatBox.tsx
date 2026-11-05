@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Agent, ChatMessage, ChatFontSizeType, AgentId, DelegationMode } from '../types';
+import { Agent, ChatMessage, ChatFontSizeType, AgentId, DelegationMode, FileAttachmentMeta } from '../types';
 import {
   Paperclip,
   SendHorizontal,
@@ -9,6 +9,11 @@ import {
   Square,
   ChevronDown,
   ChevronRight,
+  X,
+  FileText,
+  Download,
+  CheckCircle2,
+  XCircle,
 } from 'lucide-react';
 import { IDENTITY_AGENTS_MAP } from '../config/identity';
 
@@ -28,6 +33,11 @@ interface ChatBoxProps {
   voiceDotHeights?: number[];
   workingAgents?: AgentId[];
   workingMode?: DelegationMode;
+  uploadedFile?: FileAttachmentMeta | null;
+  isCaptionsOn?: boolean;
+  onRemoveUploadedFile?: () => void;
+  onSaveFileApproval?: (msgId: string, allowed: boolean) => void;
+  onFileUpload?: (file: File) => void;
 }
 
 export const ChatBox: React.FC<ChatBoxProps> = ({
@@ -41,16 +51,21 @@ export const ChatBox: React.FC<ChatBoxProps> = ({
   isSpeaking = false,
   onStopSpeaking,
   isMicOn = false,
-  onToggleMic,
   voiceLevel = 0,
   voiceDotHeights = [4, 4, 4, 4, 4],
   workingAgents = [],
   workingMode = 'ask',
+  uploadedFile = null,
+  isCaptionsOn = false,
+  onRemoveUploadedFile,
+  onSaveFileApproval,
+  onFileUpload,
 }) => {
   const [inputText, setInputText] = useState('');
   const [expandedAskIds, setExpandedAskIds] = useState<Record<string, boolean>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -104,6 +119,16 @@ export const ChatBox: React.FC<ChatBoxProps> = ({
 
   const currentIdent = IDENTITY_AGENTS_MAP[selectedAgent.id] || IDENTITY_AGENTS_MAP.rose;
 
+  // Filter messages for voice mode (only if Mic is ON and Captions are OFF)
+  // typed messages, system messages, and errors are ALWAYS shown.
+  const filteredMessages = messages.filter(msg => {
+    if (!isMicOn || isCaptionsOn) return true;
+    if (msg.isSystem) return true;
+    if (msg.errorMeta) return true;
+    if (!msg.fromVoice) return true;
+    return false;
+  });
+
   return (
     <aside className="w-[27%] min-w-[320px] max-w-[420px] h-full flex flex-col bg-gradient-to-b from-[#060c1d] via-[#040814] to-[#030610] border-r border-sky-500/30 select-none relative z-20 shrink-0 shadow-[4px_0_20px_rgba(0,10,30,0.7)]">
       {/* Top subtle bar with Clear chat button for the selected agent */}
@@ -127,7 +152,7 @@ export const ChatBox: React.FC<ChatBoxProps> = ({
 
       {/* Messages List starts directly below header bar */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4 no-scrollbar">
-        {messages.length === 0 && !isTyping && (
+        {filteredMessages.length === 0 && !isTyping && (
           <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400 space-y-2">
             <div
               className="w-12 h-12 rounded-full overflow-hidden border-2 flex items-center justify-center bg-[#07122b]"
@@ -151,7 +176,7 @@ export const ChatBox: React.FC<ChatBoxProps> = ({
           </div>
         )}
 
-        {messages.map((msg) => {
+        {filteredMessages.map((msg) => {
           // 1) Delegation line in Rose's chat: "Rose → Mira: <কাজ>"
           if (msg.teamMeta?.kind === 'delegation') {
             return (
@@ -328,6 +353,59 @@ export const ChatBox: React.FC<ChatBoxProps> = ({
                   }`}
                 >
                   <p className="whitespace-pre-wrap">{msg.text}</p>
+                  
+                  {msg.saveFileMeta && (
+                    <div className="mt-3 p-3 rounded-xl bg-black/30 border border-white/10 space-y-2.5">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-9 h-9 rounded-lg bg-sky-500/20 flex items-center justify-center text-sky-400 shrink-0">
+                          <FileText className="w-5 h-5" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-bold text-white truncate">{msg.saveFileMeta.name}</p>
+                          <p className="text-[10px] text-slate-400">{(msg.saveFileMeta.size / 1024).toFixed(1)} KB</p>
+                        </div>
+                      </div>
+                      
+                      {msg.saveFileMeta.status === 'pending' ? (
+                        <>
+                          <div className="text-[10px] text-slate-300 italic line-clamp-2 opacity-70">
+                            "{msg.saveFileMeta.content.slice(0, 200)}..."
+                          </div>
+                          <div className="flex items-center gap-2 pt-1">
+                            <button 
+                              onClick={() => onSaveFileApproval?.(msg.id, true)}
+                              className="flex-1 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-[10px] font-extrabold transition-colors flex items-center justify-center gap-1 shadow-sm"
+                            >
+                              <CheckCircle2 className="w-3 h-3" />
+                              Allow
+                            </button>
+                            <button 
+                              onClick={() => onSaveFileApproval?.(msg.id, false)}
+                              className="flex-1 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold transition-colors flex items-center justify-center gap-1"
+                            >
+                              <XCircle className="w-3 h-3" />
+                              Deny
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <div className={`flex items-center gap-1.5 text-[10px] font-bold pt-1 ${msg.saveFileMeta.status === 'saved' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {msg.saveFileMeta.status === 'saved' ? (
+                            <>
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>সেভ হয়েছে</span>
+                            </>
+                          ) : (
+                            <>
+                              <XCircle className="w-3.5 h-3.5" />
+                              <span>বাতিল করা হয়েছে</span>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {msg.errorMeta?.subtext && (
                     <div
                       className={`mt-2 pt-1.5 border-t text-[11px] text-slate-400 select-text ${
@@ -442,7 +520,7 @@ export const ChatBox: React.FC<ChatBoxProps> = ({
         )}
 
         {/* User Live Interim Voice Bubble ("শুনছি...") */}
-        {interimSpeech && (
+        {interimSpeech && (!isMicOn || isCaptionsOn) && (
           <div className="flex flex-col items-end animate-in fade-in duration-150">
             <div className="flex items-center gap-1.5 text-[11px] mb-1 px-1 flex-row-reverse text-slate-300">
               <span className="font-extrabold text-xs text-sky-200 flex items-center gap-1">
@@ -518,89 +596,57 @@ export const ChatBox: React.FC<ChatBoxProps> = ({
       {/* 4. Bottom Input Row: Paperclip, Textarea message, Send Button */}
       <div className="p-3 border-t border-sky-900/60 bg-[#060e22]/95 backdrop-blur-md shrink-0">
         <div className="flex items-end gap-2 bg-[#09142e] border border-sky-500/40 focus-within:border-sky-400 focus-within:shadow-[0_0_15px_rgba(56,189,248,0.35)] rounded-2xl px-3 py-1.5 transition-all">
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file && onFileUpload) onFileUpload(file);
+              e.target.value = '';
+            }}
+            accept=".pdf,.docx,.txt,.md,.csv,.json"
+            className="hidden"
+          />
           <button
             type="button"
-            title="Attach file"
+            onClick={() => fileInputRef.current?.click()}
+            title="Attach file (PDF, DOCX, TXT, MD, CSV, JSON)"
             className="text-slate-400 hover:text-sky-300 transition-colors p-1.5 pb-2 shrink-0"
           >
             <Paperclip className="w-4 h-4 rotate-45" />
           </button>
 
-          <textarea
-            ref={textareaRef}
-            rows={1}
-            value={inputText}
-            onChange={handleInputChange}
-            onKeyDown={handleKeyDown}
-            placeholder={`Message ${currentIdent.name}...`}
-            disabled={isTyping}
-            className="flex-1 bg-transparent text-xs sm:text-sm text-white placeholder-slate-400 focus:outline-none min-w-0 py-1.5 resize-none max-h-28 disabled:opacity-60"
-          />
-
-          {/* Voice Level 5 Dots / Speaking Indicator + 36px Round Mic Button */}
-          <div className="flex items-center gap-1.5 shrink-0 mb-0.5">
-            {isSpeaking ? (
-              <div className="flex items-center gap-1">
-                <span className="px-1.5 py-0.5 rounded-md bg-sky-500/15 border border-sky-400/30 text-[10px] font-bold text-sky-300 animate-pulse select-none whitespace-nowrap">
-                  বলছে...
-                </span>
-                {onStopSpeaking && (
-                  <button
-                    type="button"
-                    onClick={onStopSpeaking}
-                    title="বলা থামান (Stop)"
-                    className="px-2 py-0.5 rounded-md bg-rose-500/20 hover:bg-rose-500/35 border border-rose-500/50 text-rose-300 hover:text-white flex items-center gap-1 text-[10px] font-bold transition-all whitespace-nowrap"
-                  >
-                    <Square className="w-2.5 h-2.5 fill-current" />
-                    <span>Stop</span>
-                  </button>
-                )}
-              </div>
-            ) : (
-              <div
-                aria-label="Voice Level Indicator"
-                className={`flex items-center justify-center gap-[3px] h-6 px-1 transition-opacity duration-200 ${
-                  isMicOn ? 'opacity-100' : 'opacity-30'
-                }`}
-              >
-                {[0, 1, 2, 3, 4].map((idx) => {
-                  const isVoiceActive = isMicOn && voiceLevel > 0.03;
-                  const dotH = isVoiceActive
-                    ? Math.max(4, Math.min(22, voiceDotHeights[idx] ?? 4))
-                    : 4;
-                  return (
-                    <span
-                      key={idx}
-                      style={{
-                        width: '4px',
-                        height: `${dotH}px`,
-                      }}
-                      className={`rounded-full transition-all duration-75 ${
-                        isVoiceActive
-                          ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]'
-                          : 'bg-slate-400'
-                      }`}
-                    />
-                  );
-                })}
+          <div className="flex-1 flex flex-col min-w-0">
+            {uploadedFile && (
+              <div className="mb-2 flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-sky-500/10 border border-sky-400/30 w-fit max-w-full animate-in zoom-in-95 duration-200">
+                <FileText className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                <div className="flex flex-col min-w-0">
+                  <span className="text-[10px] font-bold text-white truncate max-w-[120px]">
+                    {uploadedFile.name}
+                  </span>
+                  <span className="text-[9px] text-slate-400">
+                    {(uploadedFile.size / 1024).toFixed(1)} KB {uploadedFile.isTruncated && '• (আংশিক)'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={onRemoveUploadedFile}
+                  className="p-1 hover:bg-sky-500/20 rounded-lg text-slate-400 hover:text-rose-400 transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
               </div>
             )}
-
-            {onToggleMic && (
-              <button
-                type="button"
-                onClick={onToggleMic}
-                title={isMicOn ? 'মাইক বন্ধ করুন' : 'মাইক চালু করুন'}
-                style={{ width: '36px', height: '36px' }}
-                className={`rounded-full flex items-center justify-center transition-all shrink-0 border ${
-                  isMicOn
-                    ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300 shadow-[0_0_12px_rgba(52,211,153,0.45)]'
-                    : 'bg-[#0c1d42] border-sky-500/30 text-slate-300 hover:text-white hover:border-sky-400/60'
-                }`}
-              >
-                <Mic className={`w-4 h-4 ${isMicOn ? 'text-emerald-300' : ''}`} />
-              </button>
-            )}
+            <textarea
+              ref={textareaRef}
+              rows={1}
+              value={inputText}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              placeholder={`Message ${currentIdent.name}...`}
+              disabled={isTyping}
+              className="w-full bg-transparent text-xs sm:text-sm text-white placeholder-slate-400 focus:outline-none min-w-0 py-1.5 resize-none max-h-28 disabled:opacity-60"
+            />
           </div>
 
           <button

@@ -22,7 +22,7 @@ export interface Agent {
 export type DelegationMode = 'ask' | 'handoff';
 
 export interface TeamMessageMeta {
-  kind: 'delegation' | 'report' | 'rose_task' | 'ask_fold' | 'handoff_reply';
+  kind: 'delegation' | 'report' | 'rose_task' | 'ask_fold' | 'handoff_reply' | 'save_file';
   mode?: DelegationMode;
   targetAgentId?: AgentId;
   reportAgentId?: AgentId;
@@ -62,6 +62,8 @@ export interface ChatMessage {
   emotion?: 'warm' | 'happy' | 'caring' | 'serious' | 'excited' | 'sad' | string;
   isSystem?: boolean;
   fromVoice?: boolean;
+  fileMeta?: FileAttachmentMeta;
+  saveFileMeta?: SaveFileRequestMeta;
   errorMeta?: {
     model?: string;
     statusCode?: number | string;
@@ -146,6 +148,7 @@ export interface AgentSettingsConfig {
   responseStyle: ResponseStyleType;
   customInstructions: string;
   enabled: boolean;
+  elevenLabsVoiceId?: string;
 }
 
 export type RoseCharacterPresetType =
@@ -201,10 +204,37 @@ export interface AiModelConfig {
 
 export type UserAddressAsType = 'শুধু নাম' | 'ভাই' | 'আপু' | 'স্যার' | 'ম্যাডাম';
 
+export type TtsEngineType = 'Auto' | 'ElevenLabs' | 'Browser';
+
 export interface VoiceSettingsConfig {
   voiceReply: boolean; // default true
   speed: number; // default 1.0
   volume: number; // default 1.0
+  engine: TtsEngineType; // default 'Auto'
+  elevenLabsModelId: string; // default 'eleven_v3'
+  elevenLabsCharLimit: number; // default 300
+}
+
+export interface FileAttachmentMeta {
+  name: string;
+  size: number;
+  type: string;
+  content: string;
+  isTruncated?: boolean;
+}
+
+export interface SaveFileRequestMeta {
+  name: string;
+  content: string;
+  size: number;
+  status: 'pending' | 'allowed' | 'denied' | 'saved';
+  error?: string;
+  timestamp: string;
+}
+
+export interface PcControlConfig {
+  allowFileSave: boolean;
+  workFolderName?: string;
 }
 
 export interface AppSettings {
@@ -219,6 +249,8 @@ export interface AppSettings {
   connections: ApiConnections;
   aiModel: AiModelConfig;
   voiceSettings: VoiceSettingsConfig;
+  pcControl: PcControlConfig;
+  voiceCaptions: boolean; // default false
 }
 
 

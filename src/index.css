@@ -187,3 +187,13 @@
   animation: soundwave3 0.65s ease-in-out infinite 0.3s;
 }
 
+/* Header Voice Dot Wave Animation */
+@keyframes headerWave {
+  0%, 100% { height: 6px; }
+  50% { height: 18px; }
+}
+
+.animate-header-wave {
+  animation: headerWave 0.8s ease-in-out infinite;
+}
+

@@ -24,7 +24,7 @@ export const CONNECTION_DETAILS: Record<
     subtitle: 'Voice & reasoning',
     getKeyUrl: 'https://aistudio.google.com/app/apikey',
     guideline: 'Google AI Studio থেকে আপনার Gemini API কী তৈরি করে পেস্ট করুন।',
-    keyPlaceholder: 'AIzaSy...',
+    keyPlaceholder: 'আপনার কী এখানে দিন...',
   },
   groq: {
     name: 'GROQ',
@@ -98,19 +98,19 @@ export async function validateConnection(
       });
     }
 
+    const data = await response.json().catch(() => ({}));
+    const serverMsg = data.message || data.error || '';
+
     clearTimeout(timeoutId);
 
     if (response.status === 200) {
       return { status: 'ready', message: 'সফলভাবে সংযুক্ত' };
-    } else if (response.status === 401 || response.status === 403) {
-      return { status: 'error', message: 'কী ভুল বা বাতিল' };
-    } else if (response.status === 429) {
-      return { status: 'error', message: 'লিমিট শেষ' };
     } else {
-      return { status: 'error', message: 'কী ভুল বা বাতিল' };
+      // Use descriptive message from server if available
+      return { status: 'error', message: serverMsg || 'কী ভুল বা বাতিল' };
     }
-  } catch {
+  } catch (err: any) {
     clearTimeout(timeoutId);
-    return { status: 'error', message: 'ইন্টারনেট বা সংযোগ সমস্যা' };
+    return { status: 'error', message: err.message || 'ইন্টারনেট বা সংযোগ সমস্যা' };
   }
 }

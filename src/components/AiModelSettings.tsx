@@ -33,25 +33,32 @@ interface ChatModelOption {
 
 const CHAT_MODELS: ChatModelOption[] = [
   {
-    id: 'llama-3.3-70b-versatile',
-    name: 'llama-3.3-70b-versatile',
+    id: 'openai/gpt-oss-120b',
+    name: 'openai/gpt-oss-120b',
     provider: 'groq',
-    desc: 'Groq, fast chat',
+    desc: 'Reasoning model, smart and logical',
     badge: 'Groq',
     isDefault: true,
   },
   {
-    id: 'llama-3.1-8b-instant',
-    name: 'llama-3.1-8b-instant',
+    id: 'openai/gpt-oss-20b',
+    name: 'openai/gpt-oss-20b',
     provider: 'groq',
-    desc: 'Groq, ultra fast',
+    desc: 'Reasoning model, fast and efficient',
     badge: 'Groq',
   },
   {
-    id: 'gemini-1.5-flash',
-    name: 'gemini-1.5-flash',
+    id: 'qwen/qwen3.6-27b',
+    name: 'qwen/qwen3.6-27b',
+    provider: 'groq',
+    desc: 'High quality multi-purpose model',
+    badge: 'Groq',
+  },
+  {
+    id: 'gemini-3.5-flash',
+    name: 'gemini-3.5-flash',
     provider: 'gemini',
-    desc: 'Gemini, smart and balanced',
+    desc: 'Gemini, ultra-fast and reliable',
     badge: 'Gemini',
   },
 ];
@@ -139,7 +146,11 @@ export const AiModelSettings: React.FC<AiModelSettingsProps> = ({
           body: JSON.stringify({
             model: modelToTest,
             messages: [{ role: 'user', content: 'hi' }],
-            max_tokens: 20,
+            max_tokens: 200,
+            ...(modelToTest.includes('gpt-oss') ? {
+              reasoning_effort: "low",
+              max_completion_tokens: 1024
+            } : {})
           }),
           signal: controller.signal,
         });
@@ -208,7 +219,7 @@ export const AiModelSettings: React.FC<AiModelSettingsProps> = ({
             prompt: 'hi',
             apiKey: apiKey || undefined,
             generationConfig: {
-              maxOutputTokens: 20,
+              maxOutputTokens: 200,
             },
           }),
           signal: controller.signal,
@@ -427,7 +438,7 @@ export const AiModelSettings: React.FC<AiModelSettingsProps> = ({
           </div>
         </div>
 
-        {/* একক কার্ড: gemini-1.5-flash (Recommended) */}
+        {/* একক কার্ড: gemini-3.8-live (Recommended) */}
         <div className="p-3 rounded-xl bg-gradient-to-r from-[#0d2252] to-[#0a1a3f] border border-sky-400/80 shadow-[0_0_12px_rgba(56,189,248,0.2)] flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="w-5 h-5 rounded-full border border-sky-400 bg-sky-500 text-white flex items-center justify-center shadow-[0_0_8px_#38bdf8]">
@@ -435,10 +446,10 @@ export const AiModelSettings: React.FC<AiModelSettingsProps> = ({
             </div>
             <div>
               <span className="text-xs font-black text-white font-mono tracking-wide">
-                gemini-1.5-flash
+                gemini-3.8-live
               </span>
               <p className="text-[10px] text-sky-300/90">
-                Gemini standard model
+                Optimized for real-time voice
               </p>
             </div>
           </div>

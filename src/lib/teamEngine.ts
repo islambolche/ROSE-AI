@@ -4,6 +4,7 @@ import {
   DelegationMode,
   OfficeAgentPhase,
   TeamDelegationTask,
+  FileAttachmentMeta,
 } from '../types';
 import { IDENTITY_AGENTS_MAP } from '../config/identity';
 import { generateAgentAnswer, AgentAnswerResult } from './agentEngine';
@@ -249,7 +250,8 @@ function buildRoseHandoffShortSentence(agentIds: SpecialistAgentId[]): string {
  */
 async function executeSpecialistTask(
   delegation: DelegatedTaskItem,
-  fromVoice?: boolean
+  fromVoice?: boolean,
+  uploadedFile?: FileAttachmentMeta
 ): Promise<SpecialistReportItem> {
   const { agentId, mode, task } = delegation;
   const agentIdent = IDENTITY_AGENTS_MAP[agentId];
@@ -298,6 +300,7 @@ ${modeInstruction}`;
     const res = await generateAgentAnswer(agentId, [syntheticUserMsg], {
       extraSystemPrompt: specialistInstruction,
       fromVoice,
+      uploadedFile,
     });
 
     const cleanReport = res.isError
@@ -357,7 +360,7 @@ function delay(ms: number): Promise<void> {
 export async function handleRoseTeamTurn(
   history: ChatMessage[],
   callbacks?: TeamOrchestrationCallbacks,
-  options?: { fromVoice?: boolean }
+  options?: { fromVoice?: boolean; uploadedFile?: FileAttachmentMeta }
 ): Promise<RoseTeamTurnResult> {
   const lastUserMsgObj = [...history].reverse().find((m) => m.sender === 'user');
   const lastUserMessage = lastUserMsgObj?.text || '';
@@ -376,6 +379,7 @@ export async function handleRoseTeamTurn(
   const firstStepResult = await generateAgentAnswer('rose', history, {
     extraSystemPrompt: roseExtraPrompt,
     fromVoice: isFromVoice,
+    uploadedFile: options?.uploadedFile,
   });
 
   if (firstStepResult.isError) {
@@ -469,7 +473,7 @@ export async function handleRoseTeamTurn(
         callbacks.onWorkingAgentsChange([del.agentId], 'handoff');
       }
 
-      const rep = await executeSpecialistTask(del, isFromVoice);
+      const rep = await executeSpecialistTask(del, isFromVoice, options?.uploadedFile);
       lastReplyText = rep.reportText;
       lastReplyIsError = Boolean(rep.isError);
 
@@ -546,7 +550,7 @@ export async function handleRoseTeamTurn(
   // গ) ASK-তে ভেতরে একসাথে তথ্য নেওয়া যাবে
   const reports: SpecialistReportItem[] = await Promise.all(
     normalizedDelegations.map(async (del) => {
-      const rep = await executeSpecialistTask(del, isFromVoice);
+      const rep = await executeSpecialistTask(del, isFromVoice, options?.uploadedFile);
       // চ্যাটে শুধু একটা ধূসর ছোট লাইন "Rose → Mira থেকে তথ্য নিল" (চাপলে ভাঁজ খুলে এজেন্টের রিপোর্ট দেখা যাবে)
       if (callbacks?.onAskReportFold) {
         callbacks.onAskReportFold(rep);

@@ -35,6 +35,11 @@ import {
   Youtube,
   Copy,
   ExternalLink,
+  FolderOpen,
+  Shield,
+  FileText,
+  Link,
+  Info,
 } from 'lucide-react';
 import {
   AppSettings,
@@ -52,6 +57,8 @@ import {
 } from '../types';
 import { IDENTITY_AGENTS, IDENTITY_AGENTS_MAP } from '../config/identity';
 import { voiceChat } from '../lib/voiceChat';
+import { ttsService } from '../lib/tts';
+import { getFileActionLogs } from '../lib/approvals';
 import {
   settingsService,
   DEFAULT_APP_SETTINGS,
@@ -69,6 +76,10 @@ interface SettingsPanelProps {
   settings: AppSettings;
   onUpdateSettings: (newSettings: AppSettings) => void;
   onToast: (msg: string) => void;
+  directoryHandle: FileSystemDirectoryHandle | null;
+  onChooseFolder: () => void;
+  onDisconnectFolder: () => void;
+  onReconnectFolder: () => void;
 }
 
 interface MenuItem {
@@ -247,6 +258,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   settings,
   onUpdateSettings,
   onToast,
+  directoryHandle,
+  onChooseFolder,
+  onDisconnectFolder,
+  onReconnectFolder,
 }) => {
   const [activeScreen, setActiveScreen] = useState<string | null>(null);
   const [localSettings, setLocalSettings] = useState<AppSettings>(settings);
@@ -255,6 +270,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const [isVisible, setIsVisible] = useState(false);
   const [roseTestInput, setRoseTestInput] = useState<string>('আজকের কাজ কেমন চলছে?');
   const [roseTestLoading, setRoseTestLoading] = useState<boolean>(false);
+  const [fileLogs, setFileLogs] = useState<any[]>([]);
   const [roseTestOutput, setRoseTestOutput] = useState<{
     text: string;
     emotion?: string;
@@ -296,6 +312,12 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, isClosing]);
+
+  useEffect(() => {
+    if (activeScreen === 'approvals') {
+      getFileActionLogs().then(setFileLogs);
+    }
+  }, [activeScreen]);
 
   if (!isOpen && !isClosing) return null;
 
@@ -489,7 +511,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                           {item.id === 'ai-model'
                             ? localSettings.aiModel?.customChatModelId?.trim() ||
                               localSettings.aiModel?.selectedChatModelId ||
-                              'llama-3.3-70b-versatile'
+                              'openai/gpt-oss-120b'
                             : item.id === 'rose-character'
                             ? localSettings.roseCharacter?.preset || 'Soul Bond'
                             : item.desc}
@@ -817,6 +839,40 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                             }`}
                           >
                             বিস্তারিত (Detailed)
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* ElevenLabs Voice ID & Preview */}
+                      <div className="space-y-1 pt-1">
+                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                          <Mic className="w-3 h-3 text-sky-400" />
+                          <span>ElevenLabs Voice ID</span>
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={cfg.elevenLabsVoiceId || ''}
+                            onChange={(e) => handleAgentConfigChange(ident.id, 'elevenLabsVoiceId', e.target.value)}
+                            placeholder="e.g. pMs23urrqp9VG88KwyXl"
+                            className="flex-1 px-3 py-1.5 rounded-xl bg-[#050c20] border border-sky-500/30 text-white text-xs font-mono focus:outline-none focus:border-sky-400 transition-all placeholder:text-slate-600"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const sample = cfg.language === 'English' 
+                                ? `Hello, I am ${ident.name}. This is my ElevenLabs voice.`
+                                : `হ্যালো, আমি ${ident.name}। এটি আমার ElevenLabs কণ্ঠ।`;
+                              voiceChat.speak(sample, ident.id, {
+                                language: cfg.language,
+                                speed: localSettings.voiceSettings.speed,
+                                volume: localSettings.voiceSettings.volume,
+                                onMissingBengaliVoice: (note) => onToast(note)
+                              });
+                            }}
+                            className="px-3 py-1.5 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 text-sky-300 text-[10px] font-bold transition-all whitespace-nowrap"
+                          >
+                            Preview
                           </button>
                         </div>
                       </div>
@@ -1647,9 +1703,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                       setLocalSettings((prev) => ({
                         ...prev,
                         voiceSettings: {
+                          ...prev.voiceSettings,
                           voiceReply: !(prev.voiceSettings?.voiceReply !== false),
-                          speed: prev.voiceSettings?.speed ?? 1.0,
-                          volume: prev.voiceSettings?.volume ?? 1.0,
                         },
                       }))
                     }
@@ -1663,8 +1718,72 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   </button>
                 </div>
 
+                {/* Voice Engine Selector */}
+                <div className="space-y-2 pt-3 border-t border-sky-900/50">
+                  <label className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Voice Engine</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {['Auto', 'ElevenLabs', 'Browser'].map((eng) => {
+                      const isAct = localSettings.voiceSettings.engine === eng;
+                      return (
+                        <button
+                          key={eng}
+                          type="button"
+                          onClick={() => setLocalSettings(prev => ({
+                            ...prev,
+                            voiceSettings: { ...prev.voiceSettings, engine: eng as any }
+                          }))}
+                          className={`py-2 px-1 rounded-xl text-[10px] font-bold border transition-all ${
+                            isAct ? 'bg-sky-500/25 border-sky-400 text-sky-200' : 'bg-[#050c20] border-slate-800 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          {eng}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* ElevenLabs Specifics */}
+                {(localSettings.voiceSettings.engine === 'Auto' || localSettings.voiceSettings.engine === 'ElevenLabs') && (
+                  <div className="space-y-3 pt-3 border-t border-sky-900/50 animate-in slide-in-from-top-2 duration-150">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase">Model ID</label>
+                        <input
+                          type="text"
+                          value={localSettings.voiceSettings.elevenLabsModelId}
+                          onChange={(e) => setLocalSettings(prev => ({
+                            ...prev,
+                            voiceSettings: { ...prev.voiceSettings, elevenLabsModelId: e.target.value }
+                          }))}
+                          placeholder="eleven_v3"
+                          className="w-full px-2.5 py-1.5 rounded-lg bg-[#050c20] border border-sky-500/30 text-white text-[11px] focus:outline-none focus:border-sky-400"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase">Char Limit</label>
+                        <input
+                          type="number"
+                          value={localSettings.voiceSettings.elevenLabsCharLimit}
+                          onChange={(e) => setLocalSettings(prev => ({
+                            ...prev,
+                            voiceSettings: { ...prev.voiceSettings, elevenLabsCharLimit: Number(e.target.value) }
+                          }))}
+                          className="w-full px-2.5 py-1.5 rounded-lg bg-[#050c20] border border-sky-500/30 text-white text-[11px] focus:outline-none focus:border-sky-400"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 p-2 rounded-lg bg-sky-500/5 border border-sky-500/10">
+                      <div className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
+                      <span className="text-[10px] text-sky-300 font-medium">
+                        এই সেশনে ElevenLabs-এ ~{ttsService.getCharactersSent()} অক্ষর পাঠানো হয়েছে
+                      </span>
+                    </div>
+                  </div>
+                )}
+
                 {/* Speech Speed Slider */}
-                <div className="space-y-1.5 pt-2 border-t border-sky-900/50">
+                <div className="space-y-1.5 pt-3 border-t border-sky-900/50">
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-slate-300 font-bold">কণ্ঠের গতি (Speech Speed)</span>
                     <span className="text-sky-400 font-extrabold">
@@ -1681,9 +1800,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                       setLocalSettings((prev) => ({
                         ...prev,
                         voiceSettings: {
-                          voiceReply: prev.voiceSettings?.voiceReply !== false,
+                          ...prev.voiceSettings,
                           speed: Number(e.target.value),
-                          volume: prev.voiceSettings?.volume ?? 1.0,
                         },
                       }))
                     }
@@ -1709,8 +1827,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                       setLocalSettings((prev) => ({
                         ...prev,
                         voiceSettings: {
-                          voiceReply: prev.voiceSettings?.voiceReply !== false,
-                          speed: prev.voiceSettings?.speed ?? 1.0,
+                          ...prev.voiceSettings,
                           volume: Number(e.target.value),
                         },
                       }))
@@ -1732,7 +1849,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                         testLang === 'English'
                           ? 'Hello! I am Rose. Your voice settings are working properly.'
                           : 'হ্যালো! আমি রোজ। আপনার ব্যবসার সব কাজ আমি যত্নসহকারে দেখছি।';
-                      voiceChat.speak(sampleText, {
+                      voiceChat.speak(sampleText, 'rose', {
                         language: testLang,
                         speed: localSettings.voiceSettings?.speed ?? 1.0,
                         volume: localSettings.voiceSettings?.volume ?? 1.0,
@@ -1761,6 +1878,191 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           )}
 
           {/* ========================================================= */}
+          {/* PC CONTROL SUB-SCREEN (FILES & FOLDER)                   */}
+          {/* ========================================================= */}
+          {activeScreen === 'pc-control' && (
+            <div className="space-y-4 animate-in fade-in duration-200">
+              <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <FolderOpen className="w-5 h-5 text-sky-400" />
+                    <h4 className="text-xs font-extrabold text-white uppercase tracking-wider">
+                      Files & Folder
+                    </h4>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setLocalSettings((prev) => ({
+                        ...prev,
+                        pcControl: {
+                          ...prev.pcControl,
+                          allowFileSave: !prev.pcControl.allowFileSave,
+                        },
+                      }))
+                    }
+                    className={`w-12 h-6 rounded-full p-0.5 transition-colors flex items-center ${
+                      localSettings.pcControl.allowFileSave
+                        ? 'bg-emerald-500 justify-end shadow-[0_0_12px_rgba(16,185,129,0.5)]'
+                        : 'bg-slate-700 justify-start'
+                    }`}
+                  >
+                    <span className="w-5 h-5 rounded-full bg-white shadow-md transition-transform" />
+                  </button>
+                </div>
+
+                <div className="space-y-3 pt-3 border-t border-sky-900/50">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-[11px] font-bold text-slate-300">Allow Rose to save files</p>
+                      <p className="text-[10px] text-slate-400">এজেন্টকে সরাসরি পিসিতে ফাইল সেভ করতে দিন</p>
+                    </div>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-sky-950/20 border border-sky-500/20 space-y-2">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="text-slate-400">Work Folder:</span>
+                      <span className="text-sky-300 font-mono font-bold truncate max-w-[150px]">
+                        {localSettings.pcControl.workFolderName || 'No folder selected'}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {!directoryHandle ? (
+                        <button
+                          onClick={onChooseFolder}
+                          className="px-3 py-1.5 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/50 text-sky-300 text-[10px] font-bold transition-all flex items-center gap-1.5"
+                        >
+                          <FolderOpen className="w-3.5 h-3.5" />
+                          Choose work folder
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            onClick={onReconnectFolder}
+                            className="px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 text-emerald-300 text-[10px] font-bold transition-all flex items-center gap-1.5"
+                          >
+                            <Link className="w-3.5 h-3.5" />
+                            Reconnect
+                          </button>
+                          <button
+                            onClick={onDisconnectFolder}
+                            className="px-3 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 text-[10px] font-bold transition-all flex items-center gap-1.5"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                            Disconnect
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  
+                  {typeof (window as any).showDirectoryPicker === 'undefined' && (
+                    <div className="flex items-start gap-2 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200">
+                      <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      <p className="text-[10px] leading-relaxed">
+                        আপনার ব্রাউজার সরাসরি ফোল্ডার সেভ সমর্থন করে না। অ্যাপ আলাদা ট্যাবে খুললে সরাসরি ফোল্ডারে সেভ হবে, অন্যথায় ডাউনলোড (Blob) হবে।
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleSave}
+                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white font-extrabold text-xs shadow-[0_0_20px_rgba(56,189,248,0.4)] transition-all flex items-center justify-center gap-2"
+              >
+                <Check className="w-4 h-4" />
+                <span>Save PC Control Settings</span>
+              </button>
+            </div>
+          )}
+
+          {/* ========================================================= */}
+          {/* SECURITY & PRIVACY SUB-SCREEN                              */}
+          {/* ========================================================= */}
+          {activeScreen === 'security-privacy' && (
+            <div className="space-y-4 animate-in fade-in duration-200">
+              <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-4">
+                <div className="flex items-center gap-2 pb-3 border-b border-sky-900/50">
+                  <Shield className="w-5 h-5 text-sky-400" />
+                  <h4 className="text-xs font-extrabold text-white uppercase tracking-wider">
+                    Security & Privacy
+                  </h4>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="flex items-start gap-3 p-3 rounded-xl bg-sky-500/10 border border-sky-500/30">
+                    <Info className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-[11px] font-bold text-white">ফাইল সুরক্ষা নোট:</p>
+                      <p className="text-[10px] text-slate-300 mt-0.5 leading-relaxed">
+                        আপনার আপলোড করা ফাইলের লেখা এআই সেবায় (Groq/Gemini) পাঠানো হয়। সংবেদনশীল তথ্য থাকলে তা যাচাই করে আপলোড করুন।
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest pl-1">External Services</p>
+                    <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 text-[11px] text-slate-300">
+                      ROSE AI আপনার কোনো পার্সোনাল ফাইল আমাদের সার্ভারে জমা রাখে না। সব ফাইল প্রসেসিং আপনার ব্রাউজারে লোকালভাবে সম্পন্ন হয়।
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================= */}
+          {/* APPROVALS SUB-SCREEN (LOGS)                                */}
+          {/* ========================================================= */}
+          {activeScreen === 'approvals' && (
+            <div className="space-y-4 animate-in fade-in duration-200">
+              <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-4">
+                <div className="flex items-center gap-2 pb-3 border-b border-sky-900/50">
+                  <CheckSquare className="w-5 h-5 text-sky-400" />
+                  <h4 className="text-xs font-extrabold text-white uppercase tracking-wider">
+                    File Approvals Log
+                  </h4>
+                </div>
+
+                <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1 no-scrollbar">
+                  {fileLogs.length === 0 ? (
+                    <div className="py-10 text-center space-y-2">
+                      <Clock className="w-8 h-8 text-slate-700 mx-auto" />
+                      <p className="text-xs text-slate-500">কোনো কাজের ইতিহাস নেই।</p>
+                    </div>
+                  ) : (
+                    fileLogs.map((log, idx) => (
+                      <div key={idx} className="p-3 rounded-xl bg-slate-950/60 border border-white/5 flex items-center justify-between gap-3 animate-in slide-in-from-left-2 duration-150">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-bold text-white truncate">{log.name}</span>
+                            <span className="text-[8px] px-1 py-0.5 rounded bg-slate-800 text-slate-400 uppercase">
+                              {(log.size / 1024).toFixed(1)} KB
+                            </span>
+                          </div>
+                          <p className="text-[9px] text-slate-500 mt-0.5">
+                            {new Date(log.timestamp).toLocaleString()}
+                          </p>
+                        </div>
+                        <div className={`text-[9px] font-black uppercase px-2 py-1 rounded-lg border ${
+                          log.status === 'Saved' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-rose-500/10 text-rose-400 border-rose-500/30'
+                        }`}>
+                          {log.status === 'Saved' ? 'সেভ হয়েছে' : 'বাতিল'}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <p className="text-[10px] text-slate-500 italic text-center">শেষ ৫০টি কাজের তালিকা দেখানো হচ্ছে।</p>
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================= */}
           {/* 5. ALL OTHER SUB-SCREENS: "শীঘ্রই আসছে" (Coming Soon)        */}
           {/* ========================================================= */}
           {activeScreen &&
@@ -1772,6 +2074,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             activeScreen !== 'agents' &&
             activeScreen !== 'rose-character' &&
             activeScreen !== 'analytics' &&
+            activeScreen !== 'pc-control' &&
+            activeScreen !== 'security-privacy' &&
+            activeScreen !== 'approvals' &&
             activeScreen !== 'developer' && (
               <div className="py-14 px-6 flex flex-col items-center justify-center text-center space-y-4 rounded-3xl bg-[#081533]/60 border border-sky-900/60 animate-in fade-in duration-200">
                 <div className="w-14 h-14 rounded-2xl bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-sky-400 shadow-[0_0_20px_rgba(56,189,248,0.25)]">

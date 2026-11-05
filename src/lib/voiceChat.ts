@@ -5,6 +5,9 @@
  * Does not use Gemini Live API.
  */
 
+import { ttsService } from './tts';
+import { AgentId } from '../types';
+
 interface IWindowSpeech extends Window {
   SpeechRecognition?: any;
   webkitSpeechRecognition?: any;
@@ -519,10 +522,50 @@ class VoiceChatManager {
 
   /**
    * ২) ও ৪) উত্তর বাক্যে বাক্যে ভেঙে উচ্চস্বরে বলো।
-   * বাংলা হলে voice.lang "bn" দিয়ে শুরু এমন কণ্ঠ বাছো।
-   * বাংলা কণ্ঠ পাওয়া না গেলে অন্য ভাষার কণ্ঠে বাংলা বলবে না এবং চ্যাটে একবার নোট দেখাবে।
+   * ElevenLabs চেষ্টা করবে, ব্যর্থ হলে ব্রাউজার কণ্ঠে নামবে।
    */
-  public async speak(rawText: string, options?: VoiceSynthesisOptions): Promise<void> {
+  public async speak(
+    rawText: string,
+    agentId: AgentId,
+    options?: VoiceSynthesisOptions
+  ): Promise<void> {
+    const sessionId = ++this.speakSessionId;
+    this.pauseRecognitionForSpeaking();
+
+    // 1. Try ElevenLabs first
+    try {
+      await ttsService.speak({
+        agentId,
+        text: rawText,
+        onStart: () => {
+          if (sessionId !== this.speakSessionId) return;
+          this.isSpeaking = true;
+          this.callbacks?.onSpeakingChange?.(true);
+          options?.onStart?.();
+        },
+        onEnd: () => {
+          if (sessionId !== this.speakSessionId) return;
+          this.isSpeaking = false;
+          this.callbacks?.onSpeakingChange?.(false);
+          options?.onEnd?.();
+          if (this.isMicEnabled) {
+            this.resumeRecognitionAfterSpeaking();
+          }
+        },
+        onError: (msg) => {
+          this.callbacks?.onError(msg);
+        },
+        onEngineChange: (note) => {
+          options?.onMissingBengaliVoice?.(note);
+        }
+      });
+      return; // ElevenLabs played successfully
+    } catch (err: any) {
+      // Fallback to browser
+      if (sessionId !== this.speakSessionId) return;
+    }
+
+    // 2. Browser Fallback
     if (!this.isSynthesisSupported()) {
       if (this.isMicEnabled) {
         this.resumeRecognitionAfterSpeaking();
@@ -530,8 +573,6 @@ class VoiceChatManager {
       return;
     }
 
-    // Cancel any ongoing speech without resuming mic yet
-    const sessionId = ++this.speakSessionId;
     try {
       window.speechSynthesis.cancel();
     } catch {
@@ -546,24 +587,18 @@ class VoiceChatManager {
       return;
     }
 
-    this.pauseRecognitionForSpeaking();
-
     const langCode = getLanguageCode(options?.language || this.currentLanguage);
     const voices = await this.getAvailableVoices();
 
-    if (sessionId !== this.speakSessionId) {
-      return;
-    }
+    if (sessionId !== this.speakSessionId) return;
 
     let selectedVoice: SpeechSynthesisVoice | undefined;
 
     if (langCode.startsWith('bn')) {
-      // বাংলা হলে voice.lang "bn" দিয়ে শুরু এমন কণ্ঠ বাছো
       selectedVoice = voices.find((v) =>
         v.lang.toLowerCase().replace('_', '-').startsWith('bn')
       );
 
-      // ৪) বাংলা কণ্ঠ পাওয়া না গেলে অন্য ভাষার কণ্ঠে বাংলা বলবে না
       if (!selectedVoice) {
         if (!this.hasShownMissingBnVoiceNote) {
           this.hasShownMissingBnVoiceNote = true;
@@ -572,7 +607,6 @@ class VoiceChatManager {
           );
         }
         this.isSpeaking = false;
-        this.currentUtterance = null;
         this.callbacks?.onSpeakingChange?.(false);
         options?.onEnd?.();
         if (this.isMicEnabled) {
@@ -600,7 +634,6 @@ class VoiceChatManager {
     const finishSpeakingQueue = () => {
       if (sessionId !== this.speakSessionId) return;
       this.isSpeaking = false;
-      this.currentUtterance = null;
       this.callbacks?.onSpeakingChange?.(false);
       options?.onEnd?.();
       if (this.isMicEnabled) {
@@ -654,6 +687,7 @@ class VoiceChatManager {
    */
   public stopSpeaking(): void {
     this.speakSessionId++;
+    ttsService.stop();
     if (this.isSynthesisSupported()) {
       try {
         window.speechSynthesis.cancel();

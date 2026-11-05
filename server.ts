@@ -45,23 +45,17 @@ app.post('/api/gemini/validate', async (req: Request, res: Response) => {
     return res.status(401).json({
       ok: false,
       status: 401,
-      message: 'কী নেই (No API key provided or configured on server)',
+      message: 'কী নেই (No API key provided)',
     });
   }
 
   try {
-    // Test model availability with standard flash model
-    const testResult = await client.models.get({
+    // Correct method according to @google/genai SDK is generateContent
+    // Use a minimal prompt to verify the key works
+    await client.models.generateContent({
       model: 'gemini-3.8-flash',
+      contents: [{ role: 'user', parts: [{ text: 'Hello' }] }],
     });
-
-    if (testResult) {
-      return res.json({
-        ok: true,
-        status: 200,
-        message: 'সফলভাবে সংযুক্ত',
-      });
-    }
 
     return res.json({
       ok: true,
@@ -71,11 +65,13 @@ app.post('/api/gemini/validate', async (req: Request, res: Response) => {
   } catch (err: any) {
     const status = err?.status || err?.statusCode || 500;
     const msg = String(err?.message || '');
+    
+    // Check for common error codes but pass through the message
     if (status === 401 || status === 403 || msg.includes('API_KEY_INVALID') || msg.includes('PERMISSION_DENIED')) {
       return res.status(status).json({
         ok: false,
         status,
-        message: 'কী ভুল বা বাতিল',
+        message: `কী ভুল বা বাতিল: ${msg}`,
       });
     }
     if (status === 429 || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota')) {
@@ -85,10 +81,11 @@ app.post('/api/gemini/validate', async (req: Request, res: Response) => {
         message: 'লিমিট শেষ',
       });
     }
+    
     return res.status(status).json({
       ok: false,
       status,
-      message: 'সার্ভার বা সংযোগ সমস্যা',
+      message: msg || 'সার্ভার বা সংযোগ সমস্যা',
     });
   }
 });

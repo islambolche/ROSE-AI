@@ -8,6 +8,7 @@ import {
   UserAddressAsType,
   OfficeAgentPhase,
   DelegationMode,
+  FileAttachmentMeta,
 } from './types';
 import { IDENTITY_AGENTS_MAP } from './config/identity';
 import { Header } from './components/Header';
@@ -21,6 +22,15 @@ import { Sparkles, Check, User } from 'lucide-react';
 import { generateAgentAnswer } from './lib/agentEngine';
 import { handleRoseTeamTurn, RoseTeamTurnResult } from './lib/teamEngine';
 import { voiceChat } from './lib/voiceChat';
+import { extractSaveFileSignal, readFileContent } from './lib/files';
+import { 
+  getDirectoryHandle, 
+  storeDirectoryHandle, 
+  removeDirectoryHandle,
+  logFileAction,
+  writeFileToFolder,
+  downloadAsFile
+} from './lib/approvals';
 
 const WELCOME_ADDRESS_OPTIONS: UserAddressAsType[] = [
   'শুধু নাম',
@@ -53,6 +63,14 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [activeNav, setActiveNav] = useState('dashboard');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [directoryHandle, setDirectoryHandle] = useState<FileSystemDirectoryHandle | null>(null);
+  const [currentUploadedFile, setCurrentUploadedFile] = useState<FileAttachmentMeta | null>(null);
+
+  useEffect(() => {
+    getDirectoryHandle().then((handle) => {
+      if (handle) setDirectoryHandle(handle);
+    });
+  }, []);
 
   const selectedAgentIdentity = IDENTITY_AGENTS_MAP[selectedAgentId] || IDENTITY_AGENTS_MAP.rose;
 
@@ -158,6 +176,108 @@ export default function App() {
     dbService.clearMessages(selectedAgentId);
     setMessages([]);
     showToast(`${selectedAgentIdentity.name}-এর চ্যাট ইতিহাস মোছা হয়েছে`);
+  };
+
+  const handleRemoveUploadedFile = () => {
+    setCurrentUploadedFile(null);
+  };
+
+  const handleSaveFileApproval = async (msgId: string, allowed: boolean) => {
+    const msg = messages.find((m) => m.id === msgId);
+    if (!msg || !msg.saveFileMeta) return;
+
+    if (!allowed) {
+      const updatedMsg: ChatMessage = {
+        ...msg,
+        saveFileMeta: { ...msg.saveFileMeta, status: 'denied' },
+      };
+      setMessages((prev) => prev.map((m) => (m.id === msgId ? updatedMsg : m)));
+      logFileAction({
+        name: msg.saveFileMeta.name,
+        size: msg.saveFileMeta.size,
+        status: 'Denied',
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+
+    try {
+      let finalName = msg.saveFileMeta.name;
+      const canDirectSave =
+        directoryHandle && settings.pcControl.allowFileSave && typeof (window as any).showDirectoryPicker !== 'undefined';
+
+      if (canDirectSave) {
+        finalName = await writeFileToFolder(
+          directoryHandle!,
+          msg.saveFileMeta.name,
+          msg.saveFileMeta.content
+        );
+      } else {
+        downloadAsFile(msg.saveFileMeta.name, msg.saveFileMeta.content);
+      }
+
+      const updatedMsg: ChatMessage = {
+        ...msg,
+        saveFileMeta: { ...msg.saveFileMeta, status: 'saved', name: finalName },
+      };
+      setMessages((prev) => prev.map((m) => (m.id === msgId ? updatedMsg : m)));
+      logFileAction({
+        name: finalName,
+        size: msg.saveFileMeta.size,
+        status: 'Saved',
+        timestamp: new Date().toISOString(),
+      });
+      showToast(canDirectSave ? `সেভ হয়েছে: ${finalName}` : `ডাউনলোড হচ্ছে: ${finalName}`);
+    } catch (err: any) {
+      console.error('[App] Save error:', err);
+      showToast('সেভ করতে সমস্যা হয়েছে');
+    }
+  };
+
+  const handleReconnectFolder = async () => {
+    if (directoryHandle) {
+      try {
+        const status = await (directoryHandle as any).requestPermission({ mode: 'readwrite' });
+        if (status === 'granted') {
+          showToast('Folder reconnected');
+        } else {
+          showToast('Permission denied');
+        }
+      } catch (err) {
+        showToast('Permission denied');
+      }
+    }
+  };
+
+  const handleChooseFolder = async () => {
+    try {
+      const handle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
+      await storeDirectoryHandle(handle);
+      setDirectoryHandle(handle);
+      const updated = {
+        ...settings,
+        pcControl: { ...settings.pcControl, workFolderName: handle.name },
+      };
+      setSettings(updated);
+      settingsService.saveSettings(updated);
+      showToast(`ফোল্ডার যুক্ত হয়েছে: ${handle.name}`);
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        showToast('ফোল্ডার বাছতে সমস্যা হয়েছে');
+      }
+    }
+  };
+
+  const handleDisconnectFolder = async () => {
+    await removeDirectoryHandle();
+    setDirectoryHandle(null);
+    const updated = {
+      ...settings,
+      pcControl: { ...settings.pcControl, workFolderName: '' },
+    };
+    setSettings(updated);
+    settingsService.saveSettings(updated);
+    showToast('ফোল্ডার বিচ্ছিন্ন করা হয়েছে');
   };
 
   const handleStopSpeaking = () => {
@@ -303,15 +423,28 @@ export default function App() {
               currentHistory,
               {
                 onRoseIntro: (introText, emotion) => {
+                  const { cleanText, saveRequest } = extractSaveFileSignal(introText);
+                  
                   const introRecord = dbService.addMessage({
                     agent_id: 'rose',
                     role: 'agent',
-                    content: introText,
+                    content: cleanText,
                     device: 'pc',
+                    team_meta: saveRequest ? {
+                      kind: 'save_file'
+                    } : undefined
                   });
+                  
                   const introMsg: ChatMessage = {
                     ...formatRecordToChatMessage(introRecord),
                     emotion,
+                    fromVoice: options?.fromVoice,
+                    saveFileMeta: saveRequest ? {
+                      ...saveRequest,
+                      size: new Blob([saveRequest.content]).size,
+                      status: 'pending',
+                      timestamp: new Date().toISOString()
+                    } : undefined
                   };
                   setMessages((prev) => [...prev, introMsg]);
                 },
@@ -383,6 +516,7 @@ export default function App() {
                     ...formatRecordToChatMessage(handoffRec),
                     emotion: rep.emotion,
                     isSystem: rep.isError,
+                    fromVoice: options?.fromVoice,
                     errorMeta: rep.errorSubtext ? { subtext: rep.errorSubtext } : undefined,
                   };
                   setMessages((prev) => [...prev, handoffMsg]);
@@ -404,28 +538,42 @@ export default function App() {
                   });
                 },
               },
-              { fromVoice: options?.fromVoice }
+              { fromVoice: options?.fromVoice, uploadedFile: currentUploadedFile || undefined }
             )
           : await generateAgentAnswer(selectedAgentId, currentHistory, {
               fromVoice: options?.fromVoice,
+              uploadedFile: currentUploadedFile || undefined
             });
+
+      // Clear uploaded file after successful send
+      setCurrentUploadedFile(null);
 
       // 4. Save final answer / summary to persistent db ONLY if Rose is the answering party (ASK or direct)
       if (!result.skipRoseFinalMessage) {
+        const { cleanText, saveRequest } = extractSaveFileSignal(result.text);
+
         const agentRecord = dbService.addMessage({
           agent_id: selectedAgentId,
           role: 'agent',
-          content: result.text,
+          content: cleanText,
           device: 'pc',
           is_system: result.isError,
           error_subtext: result.errorMeta?.subtext,
+          team_meta: saveRequest ? { kind: 'save_file' } : undefined
         });
 
         const agentChatMessage: ChatMessage = {
           ...formatRecordToChatMessage(agentRecord),
           emotion: result.emotion,
           isSystem: result.isError,
+          fromVoice: options?.fromVoice,
           errorMeta: result.errorMeta,
+          saveFileMeta: saveRequest ? {
+            ...saveRequest,
+            size: new Blob([saveRequest.content]).size,
+            status: 'pending',
+            timestamp: new Date().toISOString()
+          } : undefined
         };
 
         setMessages((prev) => [...prev, agentChatMessage]);
@@ -441,7 +589,7 @@ export default function App() {
 
       if (micActive && !isTurnError && voiceReplyEnabled && spokenText.trim()) {
         const agentLang = settings.agents[speakingAgentId]?.language || 'বাংলা';
-        voiceChat.speak(spokenText, {
+        voiceChat.speak(spokenText, speakingAgentId, {
           language: agentLang,
           speed: settings.voiceSettings?.speed ?? 1.0,
           volume: settings.voiceSettings?.volume ?? 1.0,
@@ -556,6 +704,12 @@ export default function App() {
     setIsWelcomeOpen(false);
   };
 
+  const handleToggleCaptions = () => {
+    const updated = { ...settings, voiceCaptions: !settings.voiceCaptions };
+    setSettings(updated);
+    settingsService.saveSettings(updated);
+  };
+
   return (
     <div className="w-screen h-screen flex flex-col bg-[#040814] text-slate-100 overflow-hidden font-sans select-none antialiased">
       {/* Toast Notification */}
@@ -660,7 +814,13 @@ export default function App() {
         onToggleCamera={() => setIsCameraOn(!isCameraOn)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         showCameraMic={settings.showCameraMic}
+        isMicOn={isMicOn}
+        onToggleMic={handleToggleMic}
         voiceLevel={voiceLevel}
+        voiceDotHeights={voiceDotHeights}
+        isSpeaking={isSpeaking}
+        isCaptionsOn={settings.voiceCaptions}
+        onToggleCaptions={handleToggleCaptions}
       />
 
       {/* 2. Main Middle Area: Left ChatBox + Right 16:9 Office */}
@@ -677,11 +837,20 @@ export default function App() {
           isSpeaking={isSpeaking}
           onStopSpeaking={handleStopSpeaking}
           isMicOn={isMicOn}
-          onToggleMic={handleToggleMic}
-          voiceLevel={voiceLevel}
-          voiceDotHeights={voiceDotHeights}
+          isCaptionsOn={settings.voiceCaptions}
           workingAgents={workingAgents}
           workingMode={workingMode}
+          uploadedFile={currentUploadedFile || undefined}
+          onRemoveUploadedFile={handleRemoveUploadedFile}
+          onSaveFileApproval={handleSaveFileApproval}
+          onFileUpload={async (file) => {
+            try {
+              const meta = await readFileContent(file);
+              setCurrentUploadedFile(meta);
+            } catch (err: any) {
+              showToast(err.message);
+            }
+          }}
         />
 
         {/* Right 16:9 Office (using office.png + 5 Transparent Clickable Hotspots) */}
@@ -707,6 +876,10 @@ export default function App() {
         settings={settings}
         onUpdateSettings={setSettings}
         onToast={showToast}
+        directoryHandle={directoryHandle}
+        onChooseFolder={handleChooseFolder}
+        onDisconnectFolder={handleDisconnectFolder}
+        onReconnectFolder={handleReconnectFolder}
       />
     </div>
   );

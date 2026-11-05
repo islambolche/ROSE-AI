@@ -57,6 +57,7 @@ export const DEFAULT_AGENTS_SETTINGS: Record<AgentId, AgentSettingsConfig> = {
     responseStyle: 'brief',
     customInstructions: '',
     enabled: true,
+    elevenLabsVoiceId: '',
   },
   mira: {
     personality: 'Friendly',
@@ -64,6 +65,7 @@ export const DEFAULT_AGENTS_SETTINGS: Record<AgentId, AgentSettingsConfig> = {
     responseStyle: 'brief',
     customInstructions: '',
     enabled: true,
+    elevenLabsVoiceId: '',
   },
   arin: {
     personality: 'Friendly',
@@ -71,6 +73,7 @@ export const DEFAULT_AGENTS_SETTINGS: Record<AgentId, AgentSettingsConfig> = {
     responseStyle: 'brief',
     customInstructions: '',
     enabled: true,
+    elevenLabsVoiceId: '',
   },
   zayan: {
     personality: 'Friendly',
@@ -78,6 +81,7 @@ export const DEFAULT_AGENTS_SETTINGS: Record<AgentId, AgentSettingsConfig> = {
     responseStyle: 'brief',
     customInstructions: '',
     enabled: true,
+    elevenLabsVoiceId: '',
   },
   naira: {
     personality: 'Friendly',
@@ -85,6 +89,7 @@ export const DEFAULT_AGENTS_SETTINGS: Record<AgentId, AgentSettingsConfig> = {
     responseStyle: 'brief',
     customInstructions: '',
     enabled: true,
+    elevenLabsVoiceId: '',
   },
 };
 
@@ -95,10 +100,10 @@ export const DEFAULT_CONNECTIONS: ApiConnections = {
 };
 
 export const DEFAULT_AI_MODEL_SETTINGS: AiModelConfig = {
-  selectedChatModelId: 'llama-3.3-70b-versatile',
+  selectedChatModelId: 'openai/gpt-oss-120b',
   customChatModelId: '',
   customChatProvider: 'groq',
-  liveVoiceModelId: 'gemini-1.5-flash',
+  liveVoiceModelId: 'gemini-3.8-live',
   customLiveVoiceModelId: '',
   sttModelId: 'whisper-large-v3-turbo',
   fallbackToGemini: true,
@@ -109,6 +114,9 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettingsConfig = {
   voiceReply: true,
   speed: 1.0,
   volume: 1.0,
+  engine: 'Auto',
+  elevenLabsModelId: 'eleven_v3',
+  elevenLabsCharLimit: 300,
 };
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -123,10 +131,22 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   connections: DEFAULT_CONNECTIONS,
   aiModel: DEFAULT_AI_MODEL_SETTINGS,
   voiceSettings: DEFAULT_VOICE_SETTINGS,
+  pcControl: {
+    allowFileSave: false,
+  },
+  voiceCaptions: false,
 };
 
 type SettingsListener = (settings: AppSettings) => void;
 const listeners = new Set<SettingsListener>();
+
+const OLD_MODELS = [
+  'gemini-1.5-flash',
+  'gemini-3.8-flash',
+  'gemini-2.5-flash',
+  'llama-3.3-70b-versatile',
+  'llama-3.1-8b-instant',
+];
 
 export const settingsService = {
   getSettings(): AppSettings {
@@ -137,8 +157,17 @@ export const settingsService = {
 
       const mergedAgents: Record<AgentId, AgentSettingsConfig> = {
         ...DEFAULT_AGENTS_SETTINGS,
-        ...(parsed.agents || {}),
       };
+
+      if (parsed.agents) {
+        Object.keys(parsed.agents).forEach((key) => {
+          const aid = key as AgentId;
+          mergedAgents[aid] = {
+            ...DEFAULT_AGENTS_SETTINGS[aid],
+            ...parsed.agents[aid],
+          };
+        });
+      }
 
       // Clean legacy hardcoded profile.json instruction if present in stored rose config
       if (
@@ -195,6 +224,19 @@ export const settingsService = {
         nickname: typeof rawRC.nickname === 'string' ? rawRC.nickname : '',
       };
 
+      // Migration for old hardcoded models
+      let selectedChatModelId =
+        parsed.aiModel?.selectedChatModelId || DEFAULT_AI_MODEL_SETTINGS.selectedChatModelId;
+      if (OLD_MODELS.includes(selectedChatModelId)) {
+        selectedChatModelId = DEFAULT_AI_MODEL_SETTINGS.selectedChatModelId;
+      }
+
+      let liveVoiceModelId =
+        parsed.aiModel?.liveVoiceModelId || DEFAULT_AI_MODEL_SETTINGS.liveVoiceModelId;
+      if (OLD_MODELS.includes(liveVoiceModelId)) {
+        liveVoiceModelId = DEFAULT_AI_MODEL_SETTINGS.liveVoiceModelId;
+      }
+
       return {
         userName: typeof parsed.userName === 'string' ? parsed.userName : '',
         userAddressAs: validAddressAs,
@@ -217,16 +259,13 @@ export const settingsService = {
               : '',
         },
         aiModel: {
-          selectedChatModelId:
-            parsed.aiModel?.selectedChatModelId ||
-            DEFAULT_AI_MODEL_SETTINGS.selectedChatModelId,
+          selectedChatModelId,
           customChatModelId:
             typeof parsed.aiModel?.customChatModelId === 'string'
               ? parsed.aiModel.customChatModelId
               : '',
           customChatProvider: parsed.aiModel?.customChatProvider === 'gemini' ? 'gemini' : 'groq',
-          liveVoiceModelId:
-            parsed.aiModel?.liveVoiceModelId || DEFAULT_AI_MODEL_SETTINGS.liveVoiceModelId,
+          liveVoiceModelId,
           customLiveVoiceModelId:
             typeof parsed.aiModel?.customLiveVoiceModelId === 'string'
               ? parsed.aiModel.customLiveVoiceModelId
@@ -254,7 +293,17 @@ export const settingsService = {
             typeof parsed.voiceSettings?.volume === 'number'
               ? Math.max(0.1, Math.min(1.0, parsed.voiceSettings.volume))
               : DEFAULT_VOICE_SETTINGS.volume,
+          engine: parsed.voiceSettings?.engine || DEFAULT_VOICE_SETTINGS.engine,
+          elevenLabsModelId: parsed.voiceSettings?.elevenLabsModelId || DEFAULT_VOICE_SETTINGS.elevenLabsModelId,
+          elevenLabsCharLimit: typeof parsed.voiceSettings?.elevenLabsCharLimit === 'number' 
+            ? parsed.voiceSettings.elevenLabsCharLimit 
+            : DEFAULT_VOICE_SETTINGS.elevenLabsCharLimit,
         },
+        pcControl: {
+          allowFileSave: Boolean(parsed.pcControl?.allowFileSave),
+          workFolderName: parsed.pcControl?.workFolderName || '',
+        },
+        voiceCaptions: parsed.voiceCaptions !== undefined ? Boolean(parsed.voiceCaptions) : false,
       };
     } catch {
       return { ...DEFAULT_APP_SETTINGS };

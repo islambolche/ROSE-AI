@@ -18,7 +18,13 @@ interface HeaderProps {
   onToggleCamera: () => void;
   onOpenSettings: () => void;
   showCameraMic?: boolean;
-  voiceLevel?: number;
+  isMicOn: boolean;
+  onToggleMic: () => void;
+  voiceLevel: number;
+  voiceDotHeights: number[];
+  isSpeaking: boolean;
+  isCaptionsOn: boolean;
+  onToggleCaptions: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -28,7 +34,13 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleCamera,
   onOpenSettings,
   showCameraMic = true,
-  voiceLevel = 0,
+  isMicOn,
+  onToggleMic,
+  voiceLevel,
+  voiceDotHeights,
+  isSpeaking,
+  isCaptionsOn,
+  onToggleCaptions,
 }) => {
   const [isTeamDropdownOpen, setIsTeamDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -69,64 +81,126 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Small separator */}
         <div className="h-6 w-px bg-sky-500/30" />
 
-        {/* Selected Agent Chip (36px circular avatar with agent glow + name + green online indicator) */}
-        <div
-          key={activeAgent.id}
-          className="flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-[#08183a]/90 border border-sky-400/30 shadow-[0_0_14px_rgba(56,189,248,0.2)] animate-in fade-in duration-200 transition-all"
-        >
-          <div className="relative shrink-0">
-            <div
-              className="w-9 h-9 rounded-full overflow-hidden border-2 flex items-center justify-center bg-[#071126] transition-all duration-300"
-              style={{
-                borderColor: activeAgent.color,
-                boxShadow: `0 0 10px ${activeAgent.color}80, inset 0 0 4px ${activeAgent.color}40`,
-              }}
-            >
-              <img
-                src={activeAgent.avatar}
-                alt={activeAgent.name}
-                className="w-full h-full object-cover"
-              />
+        {/* Selected Agent Chip + Mic & Captions */}
+        <div className="flex items-center gap-2">
+          <div
+            key={activeAgent.id}
+            className="flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-[#08183a]/90 border border-sky-400/30 shadow-[0_0_14px_rgba(56,189,248,0.2)] animate-in fade-in duration-200 transition-all"
+          >
+            <div className="relative shrink-0">
+              <div
+                className="w-9 h-9 rounded-full overflow-hidden border-2 flex items-center justify-center bg-[#071126] transition-all duration-300"
+                style={{
+                  borderColor: activeAgent.color,
+                  boxShadow: `0 0 10px ${activeAgent.color}80, inset 0 0 4px ${activeAgent.color}40`,
+                }}
+              >
+                <img
+                  src={activeAgent.avatar}
+                  alt={activeAgent.name}
+                  className="w-full h-full object-cover"
+                />
+              </div>
+              <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-[#071126] shadow-[0_0_6px_#34d399] animate-pulse" />
             </div>
-            {/* Online green indicator in corner */}
-            <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-[#071126] shadow-[0_0_6px_#34d399] animate-pulse" />
+
+            <span className="text-xs font-bold text-white tracking-wide pr-1 font-display">
+              {activeAgent.name}
+            </span>
           </div>
 
-          <span className="text-xs font-bold text-white tracking-wide pr-1 font-display">
-            {activeAgent.name}
-          </span>
+          {/* Mic Button & Dots */}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-black/30 border border-sky-500/20 shadow-inner">
+            <button
+              onClick={onToggleMic}
+              title={isMicOn ? 'Stop voice conversation' : 'Start voice conversation'}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-[10px] font-black tracking-widest transition-all ${
+                isMicOn
+                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 shadow-[0_0_15px_rgba(16,185,129,0.3)]'
+                  : 'bg-slate-800 text-slate-400 border border-slate-700'
+              }`}
+            >
+              <Mic className={`w-3.5 h-3.5 ${isMicOn ? 'animate-pulse' : ''}`} />
+              <span>MIC {isMicOn ? 'ON' : 'OFF'}</span>
+            </button>
+
+            {/* 5 Dots Indicator */}
+            <div className="flex items-center gap-[3px] w-[35px] justify-center">
+              {[0, 1, 2, 3, 4].map((idx) => {
+                let dotH = 4;
+                let dotColor = 'bg-slate-600';
+                let dotClass = '';
+                
+                if (isSpeaking) {
+                  // Agent is speaking: smooth wave animation via CSS
+                  dotColor = 'bg-sky-400 shadow-[0_0_6px_#38bdf8]';
+                  dotClass = 'animate-header-wave';
+                } else if (isMicOn && voiceLevel > 0.03) {
+                  // User is speaking: jumpy dots (managed via voiceDotHeights from App.tsx)
+                  dotH = Math.max(4, Math.min(20, voiceDotHeights[idx] || 4));
+                  dotColor = 'bg-emerald-400 shadow-[0_0_6px_#34d399]';
+                } else if (isMicOn) {
+                  // Mic is on but quiet
+                  dotH = 4;
+                  dotColor = 'bg-slate-400';
+                }
+
+                return (
+                  <span
+                    key={idx}
+                    style={{ 
+                      height: isSpeaking ? undefined : `${dotH}px`,
+                      animationDelay: isSpeaking ? `${idx * 0.1}s` : undefined
+                    }}
+                    className={`w-[4px] rounded-full transition-all duration-75 ${dotColor} ${dotClass}`}
+                  />
+                );
+              })}
+            </div>
+
+            {/* Captions Toggle */}
+            <div className="flex items-center gap-2 pl-2 border-l border-white/10 ml-1">
+              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">Captions</span>
+              <button
+                onClick={onToggleCaptions}
+                className={`w-8 h-4 rounded-full p-0.5 transition-colors flex items-center ${
+                  isCaptionsOn ? 'bg-sky-500 justify-end' : 'bg-slate-700 justify-start'
+                }`}
+              >
+                <div className="w-3 h-3 rounded-full bg-white shadow-sm" />
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* 2. CENTER: Camera ON, Mic ON, Team Members Dropdown */}
+      {/* 2. CENTER: Camera ON, Team Members Dropdown */}
       <div className="flex items-center gap-3">
-        {/* Camera & Mic ON/OFF Buttons (toggleable via settings) */}
+        {/* Camera ON/OFF Button */}
         {showCameraMic && (
-          <>
-            <button
-              onClick={onToggleCamera}
-              className={`px-4 py-2 rounded-2xl text-xs font-bold flex items-center gap-2.5 transition-all duration-200 border shadow-lg ${
-                isCameraOn
-                  ? 'bg-[#081b38] border-sky-400 text-white shadow-[0_0_18px_rgba(56,189,248,0.4)]'
-                  : 'bg-[#060e22] border-slate-700 text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <div className="w-7 h-7 rounded-full bg-sky-500/25 border border-sky-400/60 flex items-center justify-center text-sky-300">
-                <Camera className="w-4 h-4" />
-              </div>
-              <div className="text-left leading-tight">
-                <span className="block text-[11px] text-slate-300">Camera</span>
-                <span className="flex items-center gap-1 text-xs font-extrabold text-white">
-                  {isCameraOn ? 'ON' : 'OFF'}
-                  <span
-                    className={`w-2 h-2 rounded-full ${
-                      isCameraOn ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' : 'bg-slate-600'
-                    }`}
-                  />
-                </span>
-              </div>
-            </button>
-          </>
+          <button
+            onClick={onToggleCamera}
+            className={`px-4 py-2 rounded-2xl text-xs font-bold flex items-center gap-2.5 transition-all duration-200 border shadow-lg ${
+              isCameraOn
+                ? 'bg-[#081b38] border-sky-400 text-white shadow-[0_0_18px_rgba(56,189,248,0.4)]'
+                : 'bg-[#060e22] border-slate-700 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <div className="w-7 h-7 rounded-full bg-sky-500/25 border border-sky-400/60 flex items-center justify-center text-sky-300">
+              <Camera className="w-4 h-4" />
+            </div>
+            <div className="text-left leading-tight">
+              <span className="block text-[11px] text-slate-300">Camera</span>
+              <span className="flex items-center gap-1 text-xs font-extrabold text-white">
+                {isCameraOn ? 'ON' : 'OFF'}
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    isCameraOn ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' : 'bg-slate-600'
+                  }`}
+                />
+              </span>
+            </div>
+          </button>
         )}
 
         {/* Team Members Dropdown Button */}
