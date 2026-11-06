@@ -2,6 +2,7 @@ import {
   AppSettings,
   AgentSettingsConfig,
   AgentId,
+  SpecialistAgentId,
   ApiConnections,
   AiModelConfig,
   UserAddressAsType,
@@ -12,6 +13,7 @@ import {
   IntegrationsConfig,
   PermissionRulesConfig,
 } from '../types';
+import { dbService } from './db';
 
 const STORAGE_KEY = 'rose_ai_user_preferences_v2';
 const ROSE_ISOLATED_STORAGE_KEY = 'rose_isolated_character_settings_v1';
@@ -42,6 +44,7 @@ export const DEFAULT_ROSE_CHARACTER_SETTINGS: RoseCharacterConfig = {
   nickname: '',
   customCharacter: '',
   modelChoice: 'auto',
+  elevenLabsVoiceId: '',
 };
 
 export function sanitizeRoseCharacterConfig(rawRC: any): RoseCharacterConfig {
@@ -107,6 +110,25 @@ export function sanitizeRoseCharacterConfig(rawRC: any): RoseCharacterConfig {
         : DEFAULT_ROSE_TRAITS.thoughtfulQuestions,
   };
 
+  // Migrate legacy saved voice ID if user had one saved on rose agent
+  let legacyVoiceId = '';
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed?.agents?.rose?.elevenLabsVoiceId) {
+          legacyVoiceId = String(parsed.agents.rose.elevenLabsVoiceId).trim();
+        }
+      }
+    }
+  } catch {}
+
+  const voiceId =
+    typeof src.elevenLabsVoiceId === 'string'
+      ? src.elevenLabsVoiceId.trim()
+      : legacyVoiceId;
+
   return {
     characterId: 'rose',
     emotionalWarmth: validWarmth,
@@ -115,18 +137,12 @@ export function sanitizeRoseCharacterConfig(rawRC: any): RoseCharacterConfig {
     customCharacter:
       typeof src.customCharacter === 'string' ? src.customCharacter.slice(0, 1500) : '',
     modelChoice: validModelChoice,
+    elevenLabsVoiceId: voiceId,
   };
 }
 
-export const DEFAULT_AGENTS_SETTINGS: Record<AgentId, AgentSettingsConfig> = {
-  rose: {
-    personality: 'Friendly',
-    language: 'বাংলা',
-    responseStyle: 'brief',
-    customInstructions: '',
-    enabled: true,
-    elevenLabsVoiceId: '',
-  },
+// 4 Specialist agents only (Mira, Arin, Zayan, Naira). Defaults: Mira = Friendly, others = Professional.
+export const DEFAULT_AGENTS_SETTINGS: Record<SpecialistAgentId, AgentSettingsConfig> = {
   mira: {
     personality: 'Friendly',
     language: 'বাংলা',
@@ -136,7 +152,7 @@ export const DEFAULT_AGENTS_SETTINGS: Record<AgentId, AgentSettingsConfig> = {
     elevenLabsVoiceId: '',
   },
   arin: {
-    personality: 'Friendly',
+    personality: 'Professional',
     language: 'বাংলা',
     responseStyle: 'brief',
     customInstructions: '',
@@ -144,7 +160,7 @@ export const DEFAULT_AGENTS_SETTINGS: Record<AgentId, AgentSettingsConfig> = {
     elevenLabsVoiceId: '',
   },
   zayan: {
-    personality: 'Friendly',
+    personality: 'Professional',
     language: 'বাংলা',
     responseStyle: 'brief',
     customInstructions: '',
@@ -152,7 +168,7 @@ export const DEFAULT_AGENTS_SETTINGS: Record<AgentId, AgentSettingsConfig> = {
     elevenLabsVoiceId: '',
   },
   naira: {
-    personality: 'Friendly',
+    personality: 'Professional',
     language: 'বাংলা',
     responseStyle: 'brief',
     customInstructions: '',
@@ -297,6 +313,7 @@ export const settingsService = {
         ROSE_ISOLATED_STORAGE_KEY,
         JSON.stringify({ rose: sanitized })
       );
+      dbService.upsertAgentSettings('rose', sanitized);
     } catch {
       // ignore storage errors
     }
@@ -316,29 +333,19 @@ export const settingsService = {
       }
       const parsed = JSON.parse(stored);
 
-      const mergedAgents: Record<AgentId, AgentSettingsConfig> = {
+      const mergedAgents: Record<SpecialistAgentId, AgentSettingsConfig> = {
         ...DEFAULT_AGENTS_SETTINGS,
       };
 
       if (parsed.agents) {
-        Object.keys(parsed.agents).forEach((key) => {
-          const aid = key as AgentId;
-          mergedAgents[aid] = {
-            ...DEFAULT_AGENTS_SETTINGS[aid],
-            ...parsed.agents[aid],
-          };
+        (['mira', 'arin', 'zayan', 'naira'] as const).forEach((aid) => {
+          if (parsed.agents[aid]) {
+            mergedAgents[aid] = {
+              ...DEFAULT_AGENTS_SETTINGS[aid],
+              ...parsed.agents[aid],
+            };
+          }
         });
-      }
-
-      // Clean legacy hardcoded profile.json instruction if present in stored rose config
-      if (
-        mergedAgents.rose?.customInstructions &&
-        mergedAgents.rose.customInstructions.includes('profile.json')
-      ) {
-        mergedAgents.rose = {
-          ...mergedAgents.rose,
-          customInstructions: '',
-        };
       }
 
       const rawAddressAs = parsed.userAddressAs as UserAddressAsType;
@@ -534,7 +541,20 @@ export const settingsService = {
         },
         roseCharacter: sanitizedRose,
       };
+      if ((normalizedSettings.agents as any)?.rose) {
+        delete (normalizedSettings.agents as any).rose;
+      }
       localStorage.setItem(STORAGE_KEY, JSON.stringify(normalizedSettings));
+      
+      // Sync specialist agents to public.agent_settings in dbService
+      const specialistAgents: SpecialistAgentId[] = ['mira', 'arin', 'zayan', 'naira'];
+      for (const aid of specialistAgents) {
+        const cfg = (normalizedSettings.agents as Record<SpecialistAgentId, any>)?.[aid];
+        if (cfg) {
+          dbService.upsertAgentSettings(aid, cfg);
+        }
+      }
+
       this.applyGlowIntensity(normalizedSettings.glowIntensity);
       listeners.forEach((fn) => fn(normalizedSettings));
     } catch {

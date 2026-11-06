@@ -1,19 +1,41 @@
-import { AgentId, AgentMessageRecord, AgentTaskRecord } from '../types';
+import { AgentId, AgentMessageRecord, AgentTaskRecord, AgentSettingsRecord } from '../types';
 
 const STORAGE_KEYS = {
   MESSAGES: 'rose_ai_public_agent_messages',
   TASKS: 'rose_ai_public_agent_tasks',
+  SETTINGS: 'rose_ai_public_agent_settings',
   CURRENT_USER_ID: 'rose_ai_current_user_id',
 };
 
+const memoryStore = new Map<string, string>();
+
+export function safeGetItem(key: string): string | null {
+  try {
+    if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+      return localStorage.getItem(key);
+    }
+  } catch {}
+  return memoryStore.get(key) ?? null;
+}
+
+export function safeSetItem(key: string, val: string): void {
+  try {
+    if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+      localStorage.setItem(key, val);
+      return;
+    }
+  } catch {}
+  memoryStore.set(key, val);
+}
+
 // Generates or retrieves local persistent auth.uid()
 export function getOrCreateUserId(): string {
-  let uid = localStorage.getItem(STORAGE_KEYS.CURRENT_USER_ID);
+  let uid = safeGetItem(STORAGE_KEYS.CURRENT_USER_ID);
   if (!uid) {
     uid = typeof crypto !== 'undefined' && crypto.randomUUID
       ? crypto.randomUUID()
       : 'usr_' + Math.random().toString(36).substring(2, 15);
-    localStorage.setItem(STORAGE_KEYS.CURRENT_USER_ID, uid);
+    safeSetItem(STORAGE_KEYS.CURRENT_USER_ID, uid);
   }
   return uid;
 }
@@ -94,22 +116,31 @@ class DatabaseService {
   }
 
   private ensureInitialized() {
-    if (typeof window === 'undefined') return;
-
-    if (!localStorage.getItem(STORAGE_KEYS.MESSAGES)) {
+    if (!safeGetItem(STORAGE_KEYS.MESSAGES)) {
       const seeded = INITIAL_SEED_MESSAGES.map((m) => ({
         ...m,
         user_id: this.userId,
       }));
-      localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(seeded));
+      safeSetItem(STORAGE_KEYS.MESSAGES, JSON.stringify(seeded));
     }
 
-    if (!localStorage.getItem(STORAGE_KEYS.TASKS)) {
+    if (!safeGetItem(STORAGE_KEYS.TASKS)) {
       const seeded = INITIAL_SEED_TASKS.map((t) => ({
         ...t,
         user_id: this.userId,
       }));
-      localStorage.setItem(STORAGE_KEYS.TASKS, JSON.stringify(seeded));
+      safeSetItem(STORAGE_KEYS.TASKS, JSON.stringify(seeded));
+    }
+
+    if (!safeGetItem(STORAGE_KEYS.SETTINGS)) {
+      const defaultAgents: AgentId[] = ['rose', 'mira', 'arin', 'zayan', 'naira'];
+      const seededSettings: AgentSettingsRecord[] = defaultAgents.map((agentId) => ({
+        user_id: this.userId,
+        agent_id: agentId,
+        settings: {},
+        updated_at: new Date().toISOString(),
+      }));
+      safeSetItem(STORAGE_KEYS.SETTINGS, JSON.stringify(seededSettings));
     }
   }
 
@@ -117,7 +148,7 @@ class DatabaseService {
   // Corresponds to: SELECT * FROM public.agent_messages WHERE user_id = auth.uid() ORDER BY created_at ASC
   public getMessages(agentId?: AgentId): AgentMessageRecord[] {
     try {
-      const raw = localStorage.getItem(STORAGE_KEYS.MESSAGES);
+      const raw = safeGetItem(STORAGE_KEYS.MESSAGES);
       if (!raw) return [];
       const messages: AgentMessageRecord[] = JSON.parse(raw);
       // RLS Policy emulation: only own messages
@@ -165,7 +196,7 @@ class DatabaseService {
       const current = this.getAllRawMessages();
       current.push(record);
       // Keep up to 50 messages per agent
-      localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(current));
+      safeSetItem(STORAGE_KEYS.MESSAGES, JSON.stringify(current));
     } catch (e) {
       console.error('Failed to save message:', e);
     }
@@ -180,7 +211,7 @@ class DatabaseService {
       const retained = current.filter(
         (m) => !(m.user_id === this.userId && m.agent_id === agentId)
       );
-      localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(retained));
+      safeSetItem(STORAGE_KEYS.MESSAGES, JSON.stringify(retained));
     } catch (e) {
       console.error('Failed to clear messages:', e);
     }
@@ -190,7 +221,7 @@ class DatabaseService {
   // Corresponds to: SELECT * FROM public.agent_tasks WHERE user_id = auth.uid() ORDER BY updated_at DESC
   public getTasks(agentId?: AgentId): AgentTaskRecord[] {
     try {
-      const raw = localStorage.getItem(STORAGE_KEYS.TASKS);
+      const raw = safeGetItem(STORAGE_KEYS.TASKS);
       if (!raw) return [];
       const tasks: AgentTaskRecord[] = JSON.parse(raw);
       const userFiltered = tasks.filter((t) => t.user_id === this.userId);
@@ -235,7 +266,7 @@ class DatabaseService {
     try {
       const current = this.getAllRawTasks();
       current.push(record);
-      localStorage.setItem(STORAGE_KEYS.TASKS, JSON.stringify(current));
+      safeSetItem(STORAGE_KEYS.TASKS, JSON.stringify(current));
     } catch (e) {
       console.error('Failed to save task:', e);
     }
@@ -259,7 +290,7 @@ class DatabaseService {
         updated_at: new Date().toISOString(),
       };
 
-      localStorage.setItem(STORAGE_KEYS.TASKS, JSON.stringify(current));
+      safeSetItem(STORAGE_KEYS.TASKS, JSON.stringify(current));
       return current[index];
     } catch (e) {
       console.error('Failed to update task:', e);
@@ -269,7 +300,7 @@ class DatabaseService {
 
   private getAllRawMessages(): AgentMessageRecord[] {
     try {
-      const raw = localStorage.getItem(STORAGE_KEYS.MESSAGES);
+      const raw = safeGetItem(STORAGE_KEYS.MESSAGES);
       return raw ? JSON.parse(raw) : [];
     } catch {
       return [];
@@ -278,17 +309,80 @@ class DatabaseService {
 
   private getAllRawTasks(): AgentTaskRecord[] {
     try {
-      const raw = localStorage.getItem(STORAGE_KEYS.TASKS);
+      const raw = safeGetItem(STORAGE_KEYS.TASKS);
       return raw ? JSON.parse(raw) : [];
     } catch {
       return [];
     }
   }
 
-  // Generate SQL export commands containing both tables and sample data
+  // Query public.agent_settings
+  // Corresponds to: SELECT * FROM public.agent_settings WHERE user_id = auth.uid() AND agent_id = $1
+  public getAgentSettings(agentId: AgentId): AgentSettingsRecord | null {
+    try {
+      const all = this.getAllRawSettings();
+      const match = all.find((s) => s.user_id === this.userId && s.agent_id === agentId);
+      return match || null;
+    } catch (e) {
+      console.error('Failed to get agent settings:', e);
+      return null;
+    }
+  }
+
+  // Corresponds to: SELECT * FROM public.agent_settings WHERE user_id = auth.uid()
+  public getAllAgentSettings(): AgentSettingsRecord[] {
+    try {
+      const all = this.getAllRawSettings();
+      return all.filter((s) => s.user_id === this.userId);
+    } catch (e) {
+      console.error('Failed to get all agent settings:', e);
+      return [];
+    }
+  }
+
+  // Upsert into public.agent_settings
+  // Corresponds to: INSERT INTO public.agent_settings (user_id, agent_id, settings, updated_at) VALUES ... ON CONFLICT (user_id, agent_id) DO UPDATE ...
+  public upsertAgentSettings(agentId: AgentId, settings: Record<string, any>): AgentSettingsRecord {
+    const now = new Date().toISOString();
+    const all = this.getAllRawSettings();
+    const existingIndex = all.findIndex((s) => s.user_id === this.userId && s.agent_id === agentId);
+
+    const record: AgentSettingsRecord = {
+      user_id: this.userId,
+      agent_id: agentId,
+      settings: settings || {},
+      updated_at: now,
+    };
+
+    if (existingIndex >= 0) {
+      all[existingIndex] = record;
+    } else {
+      all.push(record);
+    }
+
+    try {
+      safeSetItem(STORAGE_KEYS.SETTINGS, JSON.stringify(all));
+    } catch (e) {
+      console.error('Failed to save agent settings:', e);
+    }
+
+    return record;
+  }
+
+  private getAllRawSettings(): AgentSettingsRecord[] {
+    try {
+      const raw = safeGetItem(STORAGE_KEYS.SETTINGS);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  // Generate SQL export commands containing tables and sample data
   public generateSQLExport(): string {
     const messages = this.getMessages();
     const tasks = this.getTasks();
+    const agentSettings = this.getAllAgentSettings();
 
     let sql = `-- =======================================================
 -- Rose AI Business Assistant: Database Schema & Migration
@@ -318,16 +412,46 @@ create table if not exists public.agent_tasks (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.agent_settings (
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  agent_id text not null check (agent_id in ('rose','mira','arin','zayan','naira')),
+  settings jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now(),
+  primary key (user_id, agent_id)
+);
+
+create table if not exists public.device_commands (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  from_device text not null check (from_device in ('mobile','pc')),
+  to_device text not null check (to_device in ('mobile','pc')),
+  kind text not null default 'ask' check (kind in ('ask','note')),
+  payload jsonb not null default '{}'::jsonb,
+  status text not null default 'pending' check (status in ('pending','processing','done','failed','denied')),
+  result jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists device_commands_idx on public.device_commands (user_id, to_device, status, created_at);
+
 alter table public.agent_messages enable row level security;
 alter table public.agent_tasks enable row level security;
+alter table public.agent_settings enable row level security;
+alter table public.device_commands enable row level security;
 
 create policy "own messages" on public.agent_messages
   for all using (user_id = auth.uid()) with check (user_id = auth.uid());
 create policy "own tasks" on public.agent_tasks
   for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy "own agent settings" on public.agent_settings
+  for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy "own commands" on public.device_commands
+  for all using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 alter publication supabase_realtime add table public.agent_messages;
 alter publication supabase_realtime add table public.agent_tasks;
+alter publication supabase_realtime add table public.agent_settings;
+alter publication supabase_realtime add table public.device_commands;
 
 -- Current Records:
 `;
@@ -354,6 +478,17 @@ alter publication supabase_realtime add table public.agent_tasks;
             }, '${t.device}', '${t.created_at}', '${t.updated_at}')`
         )
         .join(',\n') + ';\n';
+    }
+
+    if (agentSettings.length > 0) {
+      sql += `\n-- Seed agent_settings:\nINSERT INTO public.agent_settings (user_id, agent_id, settings, updated_at) VALUES\n`;
+      sql += agentSettings
+        .map(
+          (s) =>
+            `  ('${s.user_id}', '${s.agent_id}', '${JSON.stringify(s.settings).replace(/'/g, "''")}'::jsonb, '${s.updated_at}')`
+        )
+        .join(',\n') +
+        `\nON CONFLICT (user_id, agent_id) DO UPDATE SET settings = EXCLUDED.settings, updated_at = EXCLUDED.updated_at;\n`;
     }
 
     return sql;

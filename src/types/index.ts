@@ -151,17 +151,50 @@ export interface AgentTaskRecord {
   updated_at: string; // timestamptz
 }
 
-export type PersonalityType =
-  | 'Normal'
+// Database Table: public.agent_settings
+export interface AgentSettingsRecord {
+  user_id: string; // uuid not null default auth.uid() references auth.users(id) on delete cascade
+  agent_id: AgentId; // text not null check (agent_id in ('rose','mira','arin','zayan','naira'))
+  settings: Record<string, any>; // jsonb not null default '{}'::jsonb
+  updated_at: string; // timestamptz not null default now()
+}
+
+export type SpecialistAgentId = 'mira' | 'arin' | 'zayan' | 'naira';
+
+export type CommonPersonalityType =
   | 'Friendly'
   | 'Professional'
   | 'Funny'
+  | 'Calm'
+  | 'Motivating'
+  | 'Strict & Efficient'
   | 'Teacher'
-  | 'Developer'
-  | 'Caring'
   | 'Custom';
 
-export type LanguageType = 'বাংলা' | 'English' | 'Hindi' | 'Arabic' | 'Spanish';
+export type FemaleSpecialistPersonalityType =
+  | CommonPersonalityType
+  | 'Sweet & Caring'
+  | 'Emotional Companion'
+  | 'Playful & Sweet'
+  | 'Deep Emotional'
+  | 'Affectionate & Charming';
+
+export type MaleSpecialistPersonalityType =
+  | CommonPersonalityType
+  | 'Big Brother'
+  | 'Best Friend'
+  | 'Enthusiastic & Vibrant'
+  | 'Calm & Serious'
+  | 'Witty Bro';
+
+export type SpecialistPersonalityType =
+  | CommonPersonalityType
+  | FemaleSpecialistPersonalityType
+  | MaleSpecialistPersonalityType;
+
+export type PersonalityType = SpecialistPersonalityType | string;
+
+export type LanguageType = 'বাংলা' | 'English' | 'বাংলিশ' | 'Hindi' | 'Arabic' | 'Spanish';
 export type ResponseStyleType = 'brief' | 'detailed';
 export type ChatFontSizeType = 'small' | 'medium' | 'large';
 
@@ -200,6 +233,7 @@ export interface RoseCharacterConfig {
   nickname?: string;
   customCharacter?: string;
   modelChoice?: RoseModelChoiceType;
+  elevenLabsVoiceId?: string;
 }
 
 export interface RoseCharacterNamespace {
@@ -445,7 +479,7 @@ export interface AppSettings {
   glowIntensity: number; // 50 to 150, default 100
   chatFontSize: ChatFontSizeType; // 'small' | 'medium' | 'large'
   showCameraMic: boolean; // default true
-  agents: Record<AgentId, AgentSettingsConfig>;
+  agents: Record<SpecialistAgentId, AgentSettingsConfig>;
   characterSettings: RoseCharacterNamespace;
   roseCharacter: RoseCharacterConfig;
   connections: ApiConnections;

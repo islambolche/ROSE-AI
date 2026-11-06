@@ -18,6 +18,8 @@ import { BottomNav } from './components/BottomNav';
 import { SettingsPanel } from './components/SettingsPanel';
 import { dbService } from './services/db';
 import { settingsService } from './services/settings';
+import { supabaseService } from './services/supabaseService';
+import { deviceLinkService } from './lib/deviceLink';
 import { Sparkles, Check, User } from 'lucide-react';
 import { generateAgentAnswer } from './lib/agentEngine';
 import { handleRoseTeamTurn, RoseTeamTurnResult } from './lib/teamEngine';
@@ -99,6 +101,32 @@ export default function App() {
     getDirectoryHandle().then((handle) => {
       if (handle) setDirectoryHandle(handle);
     });
+
+    // Cloud load and merge (newer updated_at wins)
+    supabaseService.loadAndMergeCloudSettings(settings).then((res) => {
+      if (res.updated) {
+        setSettings(res.settings);
+      }
+    });
+
+    // Realtime subscription for cross-device sync
+    const unsubscribe = supabaseService.subscribeToRealtime(() => {
+      const freshSettings = settingsService.getSettings();
+      setSettings(freshSettings);
+    });
+
+    supabaseService.getCurrentUser().then((user) => {
+      if (user && supabaseService.isConfigured()) {
+        deviceLinkService.startService((q, a) => {
+          setToastMessage(`মোবাইল থেকে প্রশ্ন এসেছে: "${q.slice(0, 30)}..."`);
+        });
+      }
+    });
+
+    return () => {
+      deviceLinkService.stopService();
+      unsubscribe();
+    };
   }, []);
 
   const selectedAgentIdentity = IDENTITY_AGENTS_MAP[selectedAgentId] || IDENTITY_AGENTS_MAP.rose;
@@ -197,7 +225,8 @@ export default function App() {
     setSelectedAgentId(id);
     const agent = IDENTITY_AGENTS_MAP[id];
     showToast(`${agent.name} (${agent.role}) selected`);
-    const agentLang = settings.agents[id]?.language || 'বাংলা';
+    const agentLang =
+      id === 'rose' ? 'বাংলা' : (settings.agents as any)[id]?.language || 'বাংলা';
     voiceChat.setLanguage(agentLang);
   };
 
@@ -330,7 +359,10 @@ export default function App() {
       setVoiceDotHeights([4, 4, 4, 4, 4]);
       showToast('মাইক বন্ধ');
     } else {
-      const currentAgentLang = settings.agents[selectedAgentId]?.language || 'বাংলা';
+      const currentAgentLang =
+        selectedAgentId === 'rose'
+          ? 'বাংলা'
+          : (settings.agents as any)[selectedAgentId]?.language || 'বাংলা';
       const started = await voiceChat.startRecognition(currentAgentLang, {
         onInterim: (text) => {
           setInterimSpeech(text);
@@ -473,7 +505,7 @@ export default function App() {
         const micActive = voiceChat.isMicActive() || isMicOn;
         const voiceReplyEnabled = settings.voiceSettings?.voiceReply !== false;
         if (micActive && voiceReplyEnabled && replyText.trim()) {
-          const agentLang = settings.agents.rose?.language || 'বাংলা';
+          const agentLang = 'বাংলা';
           voiceChat.speak(replyText, 'rose', {
             language: agentLang,
             speed: settings.voiceSettings?.speed ?? 1.0,
@@ -1553,7 +1585,10 @@ export default function App() {
       const voiceReplyEnabled = settings.voiceSettings?.voiceReply !== false;
 
       if (micActive && !isTurnError && voiceReplyEnabled && spokenText.trim()) {
-        const agentLang = settings.agents[speakingAgentId]?.language || 'বাংলা';
+        const agentLang =
+          speakingAgentId === 'rose'
+            ? 'বাংলা'
+            : (settings.agents as any)[speakingAgentId]?.language || 'বাংলা';
         voiceChat.speak(spokenText, speakingAgentId, {
           language: agentLang,
           speed: settings.voiceSettings?.speed ?? 1.0,

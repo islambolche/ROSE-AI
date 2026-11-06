@@ -34,8 +34,9 @@ export const ttsService = {
     const voiceSettings = settings.voiceSettings;
     const engine = voiceSettings.engine;
     const apiKey = cleanApiKey(settings.connections.elevenLabsKey);
-    const agentConfig = settings.agents[options.agentId];
-    const voiceId = agentConfig?.elevenLabsVoiceId?.trim();
+    const voiceId = options.agentId === 'rose'
+      ? (settings.characterSettings?.rose?.elevenLabsVoiceId || settings.roseCharacter?.elevenLabsVoiceId)?.trim()
+      : (settings.agents as any)?.[options.agentId]?.elevenLabsVoiceId?.trim();
 
     const shouldUseElevenLabs = 
       (engine === 'ElevenLabs' || (engine === 'Auto' && apiKey && voiceId)) && 

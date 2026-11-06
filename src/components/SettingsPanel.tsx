@@ -4,6 +4,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronDown,
+  ChevronUp,
   Sliders,
   Users,
   Key,
@@ -41,13 +42,33 @@ import {
   FileText,
   Link,
   Info,
+  Smile,
+  Laugh,
+  Heart,
+  HeartHandshake,
+  Moon,
+  UserCheck,
+  Flame,
+  Compass,
+  SmilePlus,
+  Play,
+  Square,
+  RefreshCw,
+  AlertCircle,
+  Cloud,
+  CloudOff,
+  Zap,
+  GraduationCap,
 } from 'lucide-react';
 import {
   AppSettings,
   PersonalityType,
   LanguageType,
+  ResponseStyleType,
   ChatFontSizeType,
   AgentId,
+  SpecialistAgentId,
+  SpecialistPersonalityType,
   UserAddressAsType,
   RoseEmotionalWarmth,
   RoseCharacterTraits,
@@ -90,8 +111,13 @@ import {
   ROSE_IMMUTABLE_RULES,
   resolveRoseModelChoice,
   getRoseTemperature,
+  SPECIALIST_PERSONALITY_PRESETS,
+  SPECIALIST_IMMUTABLE_RULES,
+  SpecialistPersonalityMeta,
 } from '../lib/agentEngine';
 import { IntegrationsSettings } from './IntegrationsSettings';
+import { supabaseService } from '../services/supabaseService';
+import { deviceLinkService, DeviceCommandRecord } from '../lib/deviceLink';
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -232,6 +258,29 @@ const ADDRESS_AS_OPTIONS: UserAddressAsType[] = [
   'ম্যাডাম',
 ];
 
+const SPECIALIST_IDS: SpecialistAgentId[] = ['mira', 'arin', 'zayan', 'naira'];
+
+const PRESET_ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
+  Smile,
+  Briefcase,
+  Laugh,
+  Shield,
+  Sparkles,
+  Zap,
+  GraduationCap,
+  Heart,
+  HeartHandshake,
+  Sparkle: Sparkles,
+  Moon,
+  Sun,
+  UserCheck,
+  Users,
+  Flame,
+  Compass,
+  SmilePlus,
+  Sliders,
+};
+
 const PERSONALITY_OPTIONS: PersonalityType[] = [
   'Normal',
   'Friendly',
@@ -246,6 +295,7 @@ const PERSONALITY_OPTIONS: PersonalityType[] = [
 const LANGUAGE_OPTIONS: LanguageType[] = [
   'বাংলা',
   'English',
+  'বাংলিশ',
   'Hindi',
   'Arabic',
   'Spanish',
@@ -285,11 +335,80 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     character?: string;
   } | null>(null);
 
+  // Specialist Agents UI state (Accordion, Test, Prompt viewer)
+  const [openAccordionAgentId, setOpenAccordionAgentId] = useState<SpecialistAgentId | null>('mira');
+  const [showActivePromptAgent, setShowActivePromptAgent] = useState<SpecialistAgentId | null>(null);
+  const [specialistTestInputs, setSpecialistTestInputs] = useState<Record<SpecialistAgentId, string>>({
+    mira: 'কাস্টমার মেসেজগুলোর কী অবস্থা?',
+    arin: 'আজকের সেলস ও অর্ডারের আপডেট কী?',
+    zayan: 'পার্সেল ডেলিভারির স্ট্যাটাস বলো।',
+    naira: 'আজকের ব্যালেন্স ও খরচের হিসাব কত?',
+  });
+  const [specialistTestLoading, setSpecialistTestLoading] = useState<SpecialistAgentId | null>(null);
+  const [specialistTestOutputs, setSpecialistTestOutputs] = useState<
+    Record<SpecialistAgentId, { text: string; emotion?: string; isError?: boolean } | null>
+  >({
+    mira: null,
+    arin: null,
+    zayan: null,
+    naira: null,
+  });
+  const [previewVoiceAgent, setPreviewVoiceAgent] = useState<string | null>(null);
+  const [showCharacterDropdownAgent, setShowCharacterDropdownAgent] = useState<SpecialistAgentId | null>(null);
+  const [showMoreAgents, setShowMoreAgents] = useState<Record<SpecialistAgentId, boolean>>({
+    mira: false,
+    arin: false,
+    zayan: false,
+    naira: false,
+  });
+  const [securityModalOpen, setSecurityModalOpen] = useState(false);
+  const [securityModalAgentId, setSecurityModalAgentId] = useState<SpecialistAgentId | null>(null);
+
+  // Supabase Database & Sync state
+  const [isSupabaseLoggedIn, setIsSupabaseLoggedIn] = useState<boolean>(false);
+  const [supabaseUserEmail, setSupabaseUserEmail] = useState<string | null>(null);
+  const [supabaseUrl, setSupabaseUrl] = useState<string>(() => supabaseService.getSupabaseConfig().url);
+  const [supabaseAnonKey, setSupabaseAnonKey] = useState<string>(() => supabaseService.getSupabaseConfig().anonKey);
+  const [supabaseTesting, setSupabaseTesting] = useState<boolean>(false);
+  const [supabaseSyncing, setSupabaseSyncing] = useState<boolean>(false);
+  const [supabaseStatusMsg, setSupabaseStatusMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Phone Link state
+  const [phoneLinkStatus, setPhoneLinkStatus] = useState<'Listening' | 'Paused' | 'Error'>('Paused');
+  const [phoneLinkError, setPhoneLinkError] = useState<string | null>(null);
+  const [isPhoneLinkPaused, setIsPhoneLinkPaused] = useState<boolean>(() => deviceLinkService.getPaused());
+  const [phoneLinkRequests, setPhoneLinkRequests] = useState<DeviceCommandRecord[]>(() => deviceLinkService.getRecentRequests());
+
+  useEffect(() => {
+    if (activeScreen === 'phone-link') {
+      setPhoneLinkRequests(deviceLinkService.getRecentRequests());
+      setIsPhoneLinkPaused(deviceLinkService.getPaused());
+      const unsubStatus = deviceLinkService.subscribeStatus((st, err) => {
+        setPhoneLinkStatus(st);
+        setPhoneLinkError(err || null);
+      });
+      const unsubCmd = deviceLinkService.subscribeCommands(() => {
+        setPhoneLinkRequests(deviceLinkService.getRecentRequests());
+      });
+      return () => {
+        unsubStatus();
+        unsubCmd();
+      };
+    }
+  }, [activeScreen]);
+
   useEffect(() => {
     if (isOpen) {
       setIsClosing(false);
       setLocalSettings(settingsService.getSettings());
       setShowSavedFeedback(false);
+
+      // Check current Supabase session
+      supabaseService.getCurrentUser().then((u) => {
+        setIsSupabaseLoggedIn(Boolean(u));
+        setSupabaseUserEmail(u?.email || null);
+      });
+
       const timer = setTimeout(() => {
         setIsVisible(true);
       }, 20);
@@ -361,7 +480,23 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     });
   };
 
-  const handleSave = () => {
+  const hasUnsavedChanges = (() => {
+    try {
+      const currentAgents = JSON.stringify(localSettings.agents);
+      const savedAgents = JSON.stringify(settings.agents);
+      const currentRose = JSON.stringify(
+        localSettings.characterSettings?.rose || localSettings.roseCharacter || {}
+      );
+      const savedRose = JSON.stringify(
+        settings.characterSettings?.rose || settings.roseCharacter || {}
+      );
+      return currentAgents !== savedAgents || currentRose !== savedRose;
+    } catch {
+      return false;
+    }
+  })();
+
+  const handleSave = async () => {
     const cleanRose = getIsolatedRoseConfig(localSettings);
     const syncedSettings: AppSettings = {
       ...localSettings,
@@ -377,22 +512,34 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     if (activeScreen === 'rose-character') {
       onRoseCharacterSaved?.(cleanRose.emotionalWarmth);
     }
+
+    // Cloud sync to Supabase if configured
+    if (supabaseService.isConfigured()) {
+      try {
+        const syncRes = await supabaseService.syncAllAgentsToCloud(syncedSettings);
+        if (syncRes.ok) {
+          onToast('Settings saved & synced to Supabase Cloud');
+        } else {
+          onToast('Settings saved locally');
+        }
+      } catch {
+        onToast('Settings saved locally');
+      }
+    } else {
+      onToast('Settings saved locally');
+    }
+
     setShowSavedFeedback(true);
-    onToast('Settings saved');
     setTimeout(() => {
       setShowSavedFeedback(false);
     }, 2400);
   };
 
-  const handleAgentConfigChange = <K extends keyof AppSettings['agents'][AgentId]>(
-    agentId: AgentId,
+  const handleAgentConfigChange = <K extends keyof AppSettings['agents'][SpecialistAgentId]>(
+    agentId: SpecialistAgentId,
     field: K,
-    val: AppSettings['agents'][AgentId][K]
+    val: AppSettings['agents'][SpecialistAgentId][K]
   ) => {
-    // Prevent generic agent personality/instruction edits from ever touching Rose's isolated character
-    if (agentId === 'rose' && (field === 'personality' || field === 'customInstructions')) {
-      return;
-    }
     setLocalSettings((prev) => ({
       ...prev,
       agents: {
@@ -403,6 +550,117 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         },
       },
     }));
+  };
+
+  const handlePreviewSpecialistVoice = async (agentId: SpecialistAgentId) => {
+    const ident = IDENTITY_AGENTS_MAP[agentId];
+    const cfg = localSettings.agents[agentId] || DEFAULT_APP_SETTINGS.agents[agentId];
+    setPreviewVoiceAgent(agentId);
+    try {
+      const sample =
+        cfg.language === 'English'
+          ? `Hello, I am ${ident.name}. This is my ElevenLabs voice.`
+          : `হ্যালো, আমি ${ident.name}। এটি আমার ElevenLabs কণ্ঠস্বর।`;
+      await voiceChat.speak(sample, agentId, {
+        language: cfg.language,
+        speed: localSettings.voiceSettings?.speed ?? 1.0,
+        volume: localSettings.voiceSettings?.volume ?? 1.0,
+        onMissingBengaliVoice: (note) => onToast(note),
+      });
+    } catch (e: any) {
+      onToast(e?.message || 'ভয়েস প্রিভিউতে সমস্যা হয়েছে');
+    } finally {
+      setPreviewVoiceAgent(null);
+    }
+  };
+
+  const handleTestSpecialistAgent = async (agentId: SpecialistAgentId) => {
+    const input = specialistTestInputs[agentId]?.trim();
+    if (!input || specialistTestLoading) return;
+    setSpecialistTestLoading(agentId);
+    setSpecialistTestOutputs((prev) => ({ ...prev, [agentId]: null }));
+    try {
+      const testMsg: ChatMessage = {
+        id: `test_${agentId}_${Date.now()}`,
+        sender: 'user',
+        senderName: 'You',
+        text: input,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+      const res = await generateAgentAnswer(agentId, [testMsg]);
+      setSpecialistTestOutputs((prev) => ({
+        ...prev,
+        [agentId]: {
+          text: res.text,
+          emotion: res.emotion,
+          isError: res.isError,
+        },
+      }));
+    } catch {
+      setSpecialistTestOutputs((prev) => ({
+        ...prev,
+        [agentId]: {
+          text: 'টেস্ট উত্তর তৈরিতে ত্রুটি হয়েছে।',
+          isError: true,
+        },
+      }));
+    } finally {
+      setSpecialistTestLoading(null);
+    }
+  };
+
+  const handlePreviewRoseVoice = async () => {
+    setPreviewVoiceAgent('rose');
+    try {
+      const sample = 'হ্যালো! আমি Rose। আপনার দিনটি সুন্দর ও প্রশান্তিময় কাটুক!';
+      await voiceChat.speak(sample, 'rose', {
+        language: 'বাংলা',
+        speed: localSettings.voiceSettings?.speed ?? 1.0,
+        volume: localSettings.voiceSettings?.volume ?? 1.0,
+        onMissingBengaliVoice: (note) => onToast(note),
+      });
+    } catch (e: any) {
+      onToast(e?.message || 'Rose-এর ভয়েস প্রিভিউতে সমস্যা হয়েছে');
+    } finally {
+      setPreviewVoiceAgent(null);
+    }
+  };
+
+  const handleTestSupabaseConnection = async () => {
+    setSupabaseTesting(true);
+    setSupabaseStatusMsg(null);
+    try {
+      supabaseService.setSupabaseConfig(supabaseUrl, supabaseAnonKey);
+      const res = await supabaseService.testConnection();
+      setSupabaseStatusMsg({ ok: res.ok, text: res.message });
+      setIsSupabaseLoggedIn(Boolean(res.user));
+      setSupabaseUserEmail(res.user?.email || null);
+      if (res.ok) {
+        onToast('Supabase সংযোগ সফল');
+      } else {
+        onToast(res.message);
+      }
+    } catch (e: any) {
+      setSupabaseStatusMsg({ ok: false, text: e?.message || 'সংযোগ ব্যর্থ হয়েছে' });
+    } finally {
+      setSupabaseTesting(false);
+    }
+  };
+
+  const handleSyncSupabaseNow = async () => {
+    setSupabaseSyncing(true);
+    try {
+      const res = await supabaseService.syncAllAgentsToCloud(localSettings);
+      if (res.ok) {
+        onToast(`ক্লাউডে ${res.syncedCount}টি এজেন্টের ডেটা সিঙ্ক সম্পন্ন হয়েছে`);
+      } else {
+        onToast(res.error || 'সিঙ্ক ব্যর্থ হয়েছে');
+      }
+    } catch (e: any) {
+      onToast(e?.message || 'সিঙ্ক ত্রুটি');
+    } finally {
+      setSupabaseSyncing(false);
+    }
   };
 
   const handleRoseCharacterChange = <K extends keyof RoseCharacterConfig>(
@@ -497,6 +755,426 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     } finally {
       setRoseTestLoading(false);
     }
+  };
+
+  const renderAgentCard = (agentId: SpecialistAgentId) => {
+    const ident = IDENTITY_AGENTS_MAP[agentId];
+    const cfg = localSettings.agents[agentId] || DEFAULT_APP_SETTINGS.agents[agentId];
+    const isOpenCard = openAccordionAgentId === agentId;
+    const activePreset =
+      SPECIALIST_PERSONALITY_PRESETS.find((p) => p.id === cfg.personality) ||
+      SPECIALIST_PERSONALITY_PRESETS[0];
+
+    const isFemale = agentId === 'mira' || agentId === 'naira';
+    const commonPresets = SPECIALIST_PERSONALITY_PRESETS.filter((p) => p.applicableTo === 'all');
+    const extraPresets = SPECIALIST_PERSONALITY_PRESETS.filter((p) =>
+      isFemale ? p.applicableTo === 'female' : p.applicableTo === 'male'
+    );
+
+    const isDropdownOpen = showCharacterDropdownAgent === agentId;
+    const isMoreOpen = showMoreAgents[agentId];
+    const showPrompt = showActivePromptAgent === agentId;
+    const testOutput = specialistTestOutputs[agentId];
+    const isTesting = specialistTestLoading === agentId;
+    const isVoicePreviewing = previewVoiceAgent === agentId;
+
+    return (
+      <div
+        key={agentId}
+        className="rounded-2xl bg-[#081533] border transition-all overflow-hidden"
+        style={{
+          borderColor: isOpenCard
+            ? `${ident.color}70`
+            : cfg.enabled
+            ? `${ident.color}35`
+            : 'rgba(56,189,248,0.15)',
+          boxShadow: isOpenCard
+            ? `0 0 20px ${ident.color}25`
+            : cfg.enabled
+            ? `0 0 10px ${ident.color}10`
+            : undefined,
+        }}
+      >
+        {/* Closed Card / Accordion Header */}
+        <div
+          onClick={() => setOpenAccordionAgentId(isOpenCard ? null : agentId)}
+          className="p-3.5 flex items-center justify-between gap-3 cursor-pointer select-none hover:bg-sky-950/20 transition-colors"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div
+              className="relative w-10 h-10 rounded-full overflow-hidden border-2 shrink-0 bg-[#071126] flex items-center justify-center"
+              style={{
+                borderColor: ident.color,
+                boxShadow: `0 0 10px ${ident.color}40`,
+              }}
+            >
+              <img src={ident.avatar} alt={ident.name} className="w-full h-full object-cover" />
+            </div>
+
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <h4 className="text-sm font-extrabold text-white font-display">{ident.name}</h4>
+                <span
+                  title="লক করা পরিচয়"
+                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-slate-800/80 text-[9px] font-bold text-slate-300 border border-slate-700/60"
+                >
+                  <Lock className="w-2.5 h-2.5 text-slate-400" />
+                  <span>{ident.role}</span>
+                </span>
+              </div>
+
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <span
+                  className="px-2 py-0.5 rounded-md text-[10px] font-bold border truncate max-w-[180px]"
+                  style={{
+                    backgroundColor: `${ident.color}18`,
+                    borderColor: `${ident.color}45`,
+                    color: ident.color,
+                  }}
+                >
+                  {activePreset.bengaliName}
+                </span>
+                <span className="text-[10px] text-slate-400 font-mono">• {cfg.language}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2.5 shrink-0">
+            <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-1">
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={cfg.enabled}
+                  onChange={(e) => handleAgentConfigChange(agentId, 'enabled', e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-8 h-4.5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-emerald-500 shadow-inner"></div>
+              </label>
+            </div>
+
+            <div className="w-6 h-6 rounded-lg bg-sky-950/40 border border-sky-800/40 flex items-center justify-center text-slate-300">
+              {isOpenCard ? <ChevronUp className="w-3.5 h-3.5 text-sky-300" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-400" />}
+            </div>
+          </div>
+        </div>
+
+        {/* Open Card (Compact Rows) */}
+        {isOpenCard && (
+          <div className="p-3.5 pt-1 border-t border-sky-950/80 space-y-3 animate-in fade-in duration-200">
+            {/* 1. Character Dropdown Row */}
+            <div className="relative space-y-1">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1">
+                  <Sparkles className="w-3 h-3 text-sky-400" />
+                  <span>চরিত্র (Character)</span>
+                </label>
+                <span
+                  onClick={() => setSecurityModalAgentId(agentId)}
+                  className="text-[10px] font-extrabold text-sky-400 hover:text-sky-300 cursor-pointer flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-950/60 border border-sky-800/60"
+                >
+                  <Lock className="w-2.5 h-2.5" />
+                  <span>🔒 নিরাপত্তা নিয়ম</span>
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowCharacterDropdownAgent(isDropdownOpen ? null : agentId)}
+                className="w-full px-3 py-2 rounded-xl bg-[#050c20] border border-sky-500/30 text-white text-xs font-bold flex items-center justify-between hover:border-sky-400 transition-all"
+                style={{ borderColor: `${ident.color}60` }}
+              >
+                <div className="flex items-center gap-2 truncate">
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ident.color }}></span>
+                  <span className="truncate">{activePreset.bengaliName} ({activePreset.name})</span>
+                </div>
+                <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+              </button>
+
+              {/* Dropdown List */}
+              {isDropdownOpen && (
+                <div className="absolute top-full left-0 right-0 mt-1 z-20 bg-[#060e22] border border-sky-500/50 rounded-xl shadow-2xl max-h-64 overflow-y-auto p-2 space-y-2 custom-scrollbar">
+                  {/* সাধারণ (Common) */}
+                  <div>
+                    <div className="px-2 py-1 text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">
+                      সাধারণ (Common)
+                    </div>
+                    <div className="grid grid-cols-1 gap-1">
+                      {commonPresets.map((preset) => {
+                        const isSelected = cfg.personality === preset.id;
+                        const IconComponent = PRESET_ICON_MAP[preset.icon] || Sparkles;
+                        return (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            onClick={() => {
+                              handleAgentConfigChange(agentId, 'personality', preset.id);
+                              setShowCharacterDropdownAgent(null);
+                            }}
+                            className={`w-full px-2.5 py-2 rounded-lg text-left text-xs flex items-center justify-between transition-all ${
+                              isSelected ? 'bg-sky-500/25 text-white font-bold border border-sky-400/50' : 'hover:bg-sky-950/40 text-slate-300'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 truncate">
+                              <IconComponent className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                              <span className="truncate">{preset.bengaliName}</span>
+                            </div>
+                            {isSelected && <Check className="w-3 h-3 text-sky-400 shrink-0" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* আবেগী / বন্ধুসুলভ (Emotional / Friendly) */}
+                  <div>
+                    <div className="px-2 py-1 text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">
+                      {isFemale ? 'আবেগী বিকল্প (Emotional)' : 'বন্ধুসুলভ বিকল্প (Friendly/Bro)'}
+                    </div>
+                    <div className="grid grid-cols-1 gap-1">
+                      {extraPresets.map((preset) => {
+                        const isSelected = cfg.personality === preset.id;
+                        const IconComponent = PRESET_ICON_MAP[preset.icon] || Sparkles;
+                        return (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            onClick={() => {
+                              handleAgentConfigChange(agentId, 'personality', preset.id);
+                              setShowCharacterDropdownAgent(null);
+                            }}
+                            className={`w-full px-2.5 py-2 rounded-lg text-left text-xs flex items-center justify-between transition-all ${
+                              isSelected ? 'bg-sky-500/25 text-white font-bold border border-sky-400/50' : 'hover:bg-sky-950/40 text-slate-300'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 truncate">
+                              <IconComponent className="w-3.5 h-3.5 text-pink-400 shrink-0" />
+                              <span className="truncate">{preset.bengaliName}</span>
+                            </div>
+                            {isSelected && <Check className="w-3 h-3 text-sky-400 shrink-0" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Custom */}
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleAgentConfigChange(agentId, 'personality', 'Custom');
+                        setShowCharacterDropdownAgent(null);
+                      }}
+                      className={`w-full px-2.5 py-2 rounded-lg text-left text-xs flex items-center justify-between transition-all ${
+                        cfg.personality === 'Custom' ? 'bg-sky-500/25 text-white font-bold border border-sky-400/50' : 'hover:bg-sky-950/40 text-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Sliders className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        <span>কাস্টম চরিত্র (Custom Character)</span>
+                      </div>
+                      {cfg.personality === 'Custom' && <Check className="w-3 h-3 text-sky-400 shrink-0" />}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* 2. Language Row (3 buttons: বাংলা / English / বাংলিশ) */}
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1">
+                <Globe className="w-3 h-3 text-sky-400" />
+                <span>ভাষা (Language)</span>
+              </label>
+              <div className="grid grid-cols-3 gap-1 bg-[#050c20] p-1 rounded-xl border border-sky-500/25">
+                {(['বাংলা', 'English', 'বাংলিশ'] as const).map((lang) => {
+                  const isCur = cfg.language === lang;
+                  return (
+                    <button
+                      key={lang}
+                      type="button"
+                      onClick={() => handleAgentConfigChange(agentId, 'language', lang)}
+                      className={`py-1.5 text-[11px] font-extrabold rounded-lg transition-all ${
+                        isCur ? 'bg-sky-500 text-white shadow-sm' : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {lang}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 3. Response Style Row (সংক্ষিপ্ত / বিস্তারিত) */}
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1">
+                <FileText className="w-3 h-3 text-sky-400" />
+                <span>ধরন (Response Style)</span>
+              </label>
+              <div className="grid grid-cols-2 gap-1 bg-[#050c20] p-1 rounded-xl border border-sky-500/25">
+                <button
+                  type="button"
+                  onClick={() => handleAgentConfigChange(agentId, 'responseStyle', 'brief')}
+                  className={`py-1.5 text-[11px] font-extrabold rounded-lg transition-all ${
+                    cfg.responseStyle === 'brief' ? 'bg-sky-500 text-white shadow-sm' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  সংক্ষিপ্ত (Brief)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleAgentConfigChange(agentId, 'responseStyle', 'detailed')}
+                  className={`py-1.5 text-[11px] font-extrabold rounded-lg transition-all ${
+                    cfg.responseStyle === 'detailed' ? 'bg-sky-500 text-white shadow-sm' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  বিস্তারিত (Detailed)
+                </button>
+              </div>
+            </div>
+
+            {/* 4. Voice Row (Voice ID Input & Preview in one row) */}
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1">
+                <Mic className="w-3 h-3 text-sky-400" />
+                <span>কণ্ঠ (Voice ID & Preview)</span>
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={cfg.elevenLabsVoiceId || ''}
+                  onChange={(e) => handleAgentConfigChange(agentId, 'elevenLabsVoiceId', e.target.value)}
+                  placeholder="Voice ID (e.g. 21m00...)"
+                  className="flex-1 px-3 py-1.5 rounded-xl bg-[#050c20] border border-sky-500/25 text-white text-xs font-mono focus:outline-none focus:border-sky-400 placeholder:text-slate-600"
+                />
+                <button
+                  type="button"
+                  onClick={() => handlePreviewSpecialistVoice(agentId)}
+                  disabled={isVoicePreviewing}
+                  className="px-3 py-1.5 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/40 text-sky-300 text-xs font-extrabold flex items-center gap-1 transition-all whitespace-nowrap disabled:opacity-50"
+                >
+                  <Volume2 className="w-3.5 h-3.5 text-sky-400" />
+                  <span>{isVoicePreviewing ? 'Playing...' : 'Preview'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* 5. "আরও" (More) Collapsible Section */}
+            <div className="pt-1 border-t border-sky-950/80 space-y-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setShowMoreAgents((prev) => ({
+                    ...prev,
+                    [agentId]: !prev[agentId],
+                  }))
+                }
+                className="w-full py-1.5 px-3 rounded-xl bg-sky-950/40 hover:bg-sky-900/40 border border-sky-800/40 text-sky-300 text-[11px] font-extrabold flex items-center justify-between transition-colors"
+              >
+                <span>আরও অপশন (Custom instructions, prompt, test)</span>
+                {isMoreOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+              </button>
+
+              {isMoreOpen && (
+                <div className="space-y-3 p-3 rounded-xl bg-[#050c20] border border-sky-950 animate-in fade-in duration-150">
+                  {/* Custom Instructions */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-extrabold text-white">কাস্টম নির্দেশনা (Custom Instructions)</label>
+                    <textarea
+                      rows={2}
+                      maxLength={1000}
+                      value={cfg.customInstructions || ''}
+                      onChange={(e) => handleAgentConfigChange(agentId, 'customInstructions', e.target.value)}
+                      placeholder="এই এজেন্টের জন্য অতিরিক্ত নির্দেশ দিন..."
+                      className="w-full px-3 py-1.5 rounded-xl bg-[#081533] border border-sky-500/25 text-white text-xs focus:outline-none focus:border-sky-400 resize-none"
+                    />
+                  </div>
+
+                  {/* Active Prompt */}
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <button
+                        type="button"
+                        onClick={() => setShowActivePromptAgent(showPrompt ? null : agentId)}
+                        className="text-[10px] font-extrabold text-sky-300 hover:text-sky-200 flex items-center gap-1"
+                      >
+                        <Code2 className="w-3 h-3 text-sky-400" />
+                        <span>{showPrompt ? 'সক্রিয় প্রম্পট লুকান' : 'Show active prompt'}</span>
+                      </button>
+                      {showPrompt && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const prompt = buildAgentSystemPrompt(agentId, undefined, undefined, localSettings);
+                            navigator.clipboard.writeText(prompt);
+                            onToast('প্রম্পট কপি করা হয়েছে');
+                          }}
+                          className="text-[10px] text-slate-400 hover:text-white flex items-center gap-1"
+                        >
+                          <Copy className="w-3 h-3" />
+                          <span>Copy</span>
+                        </button>
+                      )}
+                    </div>
+                    {showPrompt && (
+                      <div className="p-2 rounded-lg bg-[#030712] border border-sky-900 font-mono text-[9px] text-slate-300 whitespace-pre-wrap max-h-36 overflow-y-auto leading-relaxed">
+                        {buildAgentSystemPrompt(agentId, undefined, undefined, localSettings)}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Test Box & Output */}
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-extrabold text-white">টেস্ট এজেন্ট (Test Agent)</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={specialistTestInputs[agentId] || ''}
+                        onChange={(e) =>
+                          setSpecialistTestInputs((prev) => ({
+                            ...prev,
+                            [agentId]: e.target.value,
+                          }))
+                        }
+                        placeholder={`Test message for ${ident.name}...`}
+                        className="flex-1 px-3 py-1.5 rounded-xl bg-[#081533] border border-sky-500/25 text-white text-xs focus:outline-none focus:border-sky-400"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleTestSpecialistAgent(agentId)}
+                        disabled={isTesting || !specialistTestInputs[agentId]?.trim()}
+                        className="px-3 py-1.5 rounded-xl text-white font-extrabold text-xs transition-all shrink-0 disabled:opacity-50"
+                        style={{ backgroundColor: ident.color }}
+                      >
+                        {isTesting ? '...' : 'Test'}
+                      </button>
+                    </div>
+
+                    {testOutput && (
+                      <div
+                        className={`p-2.5 rounded-xl border text-xs space-y-1 ${
+                          testOutput.isError
+                            ? 'bg-rose-950/40 border-rose-500/40 text-rose-200'
+                            : 'bg-[#081533] border-sky-500/30 text-slate-100'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between text-[9px] font-mono text-slate-400">
+                          <span style={{ color: ident.color }} className="font-bold">
+                            {ident.name} ({activePreset.bengaliName})
+                          </span>
+                          {testOutput.emotion && <span>[{testOutput.emotion}]</span>}
+                        </div>
+                        <p className="whitespace-pre-wrap leading-relaxed">{testOutput.text}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
   };
 
   const currentRoseMenuSummary = (() => {
@@ -783,253 +1461,112 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           )}
 
           {/* ========================================================= */}
-          {/* 3. AGENTS SUB-SCREEN (SPECIALIST AGENTS ONLY + ROSE VOICE) */}
+          {/* ========================================================= */}
+          {/* 3. AGENTS SUB-SCREEN (SPECIALIST AGENTS ONLY: 4 AGENTS)    */}
           {/* ========================================================= */}
           {activeScreen === 'agents' && (
             <div className="space-y-4 animate-in fade-in duration-150">
-              <div className="p-3 rounded-xl bg-sky-950/40 border border-sky-800/40 text-[11px] text-sky-200">
-                Configure your four specialist agents (Mira, Arin, Zayan, Naira) and voice IDs. Rose's personality is strictly isolated inside the dedicated <strong>Rose Character</strong> panel.
+              {/* Header Banner */}
+              <div className="p-3.5 rounded-2xl bg-[#081533] border border-sky-500/30 shadow-[0_0_15px_rgba(56,189,248,0.12)] space-y-1">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-extrabold text-white flex items-center gap-2 font-display">
+                    <Users className="w-4 h-4 text-sky-400" />
+                    <span>Specialist agents</span>
+                  </h3>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-950/80 border border-sky-500/30 text-sky-300">
+                    4 Agents
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  চারজন স্পেশালিস্ট এজেন্টের ব্যক্তিত্ব ও কাজের সুর ঠিক করুন। Rose-এর নিয়ন্ত্রণ আলাদা <strong className="text-rose-300">&apos;Rose Character&apos;</strong>-এ।
+                </p>
               </div>
 
-              <div className="space-y-4">
-                {IDENTITY_AGENTS.map((ident) => {
-                  const cfg =
-                    localSettings.agents[ident.id] || DEFAULT_APP_SETTINGS.agents[ident.id];
-                  const isRose = ident.id === 'rose';
-
-                  return (
-                    <div
-                      key={ident.id}
-                      className="p-4 rounded-2xl bg-[#081533] border shadow-md space-y-3 transition-all"
-                      style={{
-                        borderColor: cfg.enabled ? `${ident.color}50` : 'rgba(56,189,248,0.2)',
-                        boxShadow: cfg.enabled ? `0 0 18px ${ident.color}15` : undefined,
-                      }}
-                    >
-                      {/* Read-Only Identity Card Header */}
-                      <div className="flex items-center justify-between pb-3 border-b border-sky-950/80">
-                        <div className="flex items-center gap-3">
-                          <div
-                            className="relative w-12 h-12 rounded-full overflow-hidden border-2 shrink-0 bg-[#071126] flex items-center justify-center"
-                            style={{
-                              borderColor: ident.color,
-                              boxShadow: `0 0 12px ${ident.color}60`,
-                            }}
-                          >
-                            <img
-                              src={ident.avatar}
-                              alt={ident.name}
-                              className="w-full h-full object-cover"
-                            />
-                          </div>
-
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <h4 className="text-sm font-extrabold text-white font-display">
-                                {ident.name}
-                              </h4>
-                              <span
-                                className="w-2 h-2 rounded-full"
-                                style={{ backgroundColor: ident.color }}
-                              />
-                            </div>
-                            <p className="text-[11px] text-slate-300 font-medium">
-                              {ident.role}
-                            </p>
-                          </div>
-                        </div>
-
-                        {/* Enabled Toggle Switch */}
-                        <div className="flex items-center gap-2">
-                          <span className="text-[11px] font-bold text-slate-300">
-                            {cfg.enabled ? 'Active' : 'Disabled'}
-                          </span>
-                          <label className="relative inline-flex items-center cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={cfg.enabled}
-                              onChange={(e) =>
-                                handleAgentConfigChange(ident.id, 'enabled', e.target.checked)
-                              }
-                              className="sr-only peer"
-                            />
-                            <div className="w-10 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
-                          </label>
-                        </div>
-                      </div>
-
-                      {isRose ? (
-                        <div className="p-3 rounded-xl bg-rose-950/30 border border-rose-500/30 flex items-center justify-between gap-3">
-                          <div className="space-y-0.5">
-                            <p className="text-[11px] font-extrabold text-rose-200">
-                              Isolated Rose Character Configuration
-                            </p>
-                            <p className="text-[10px] text-slate-300">
-                              Rose's personality modes, traits, and instructions are managed exclusively in <span className="font-mono text-rose-300">characterSettings.rose</span>.
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => setActiveScreen('rose-character')}
-                            className="px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/50 text-rose-200 text-[10px] font-extrabold whitespace-nowrap transition-all"
-                          >
-                            Open Rose Character
-                          </button>
-                        </div>
-                      ) : (
-                        <>
-                          {/* Modifiable: Personality & Language Dropdowns (only for Mira, Arin, Zayan, Naira) */}
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            <div className="space-y-1">
-                              <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
-                                Personality
-                              </label>
-                              <select
-                                value={cfg.personality}
-                                onChange={(e) =>
-                                  handleAgentConfigChange(
-                                    ident.id,
-                                    'personality',
-                                    e.target.value as PersonalityType
-                                  )
-                                }
-                                className="w-full px-2.5 py-1.5 rounded-xl bg-[#050c20] border border-sky-500/30 text-white text-xs font-semibold focus:outline-none focus:border-sky-400"
-                              >
-                                {PERSONALITY_OPTIONS.map((p) => (
-                                  <option key={p} value={p}>
-                                    {p}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-
-                            <div className="space-y-1">
-                              <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
-                                Language
-                              </label>
-                              <select
-                                value={cfg.language}
-                                onChange={(e) =>
-                                  handleAgentConfigChange(
-                                    ident.id,
-                                    'language',
-                                    e.target.value as LanguageType
-                                  )
-                                }
-                                className="w-full px-2.5 py-1.5 rounded-xl bg-[#050c20] border border-sky-500/30 text-white text-xs font-semibold focus:outline-none focus:border-sky-400"
-                              >
-                                {LANGUAGE_OPTIONS.map((l) => (
-                                  <option key={l} value={l}>
-                                    {l}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                          </div>
-
-                          {/* Modifiable: Response Style Segment */}
-                          <div className="space-y-1">
-                            <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
-                              Response Style
-                            </label>
-                            <div className="flex items-center gap-1 bg-[#050c20] p-1 rounded-xl border border-sky-500/30 max-w-xs">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleAgentConfigChange(ident.id, 'responseStyle', 'brief')
-                                }
-                                className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-all ${
-                                  cfg.responseStyle === 'brief'
-                                    ? 'bg-sky-500 text-white shadow-sm'
-                                    : 'text-slate-400 hover:text-white'
-                                }`}
-                              >
-                                সংক্ষিপ্ত (Brief)
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleAgentConfigChange(ident.id, 'responseStyle', 'detailed')
-                                }
-                                className={`flex-1 py-1 text-[11px] font-bold rounded-lg transition-all ${
-                                  cfg.responseStyle === 'detailed'
-                                    ? 'bg-sky-500 text-white shadow-sm'
-                                    : 'text-slate-400 hover:text-white'
-                                }`}
-                              >
-                                বিস্তারিত (Detailed)
-                              </button>
-                            </div>
-                          </div>
-                        </>
-                      )}
-
-                      {/* ElevenLabs Voice ID & Preview */}
-                      <div className="space-y-1 pt-1">
-                        <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-                          <Mic className="w-3 h-3 text-sky-400" />
-                          <span>ElevenLabs Voice ID</span>
-                        </label>
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="text"
-                            value={cfg.elevenLabsVoiceId || ''}
-                            onChange={(e) => handleAgentConfigChange(ident.id, 'elevenLabsVoiceId', e.target.value)}
-                            placeholder="e.g. pMs23urrqp9VG88KwyXl"
-                            className="flex-1 px-3 py-1.5 rounded-xl bg-[#050c20] border border-sky-500/30 text-white text-xs font-mono focus:outline-none focus:border-sky-400 transition-all placeholder:text-slate-600"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const sample = cfg.language === 'English' 
-                                ? `Hello, I am ${ident.name}. This is my ElevenLabs voice.`
-                                : `হ্যালো, আমি ${ident.name}। এটি আমার ElevenLabs কণ্ঠ।`;
-                              voiceChat.speak(sample, ident.id, {
-                                language: cfg.language,
-                                speed: localSettings.voiceSettings.speed,
-                                volume: localSettings.voiceSettings.volume,
-                                onMissingBengaliVoice: (note) => onToast(note)
-                              });
-                            }}
-                            className="px-3 py-1.5 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 text-sky-300 text-[10px] font-bold transition-all whitespace-nowrap"
-                          >
-                            Preview
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Modifiable: Custom Instructions (only for specialist agents) */}
-                      {!isRose && (
-                        <div className="space-y-1">
-                          <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
-                            Custom Instructions (কাস্টম নির্দেশনা)
-                          </label>
-                          <textarea
-                            rows={2}
-                            value={cfg.customInstructions}
-                            onChange={(e) =>
-                              handleAgentConfigChange(ident.id, 'customInstructions', e.target.value)
-                            }
-                            placeholder={`Instructions for ${ident.name}...`}
-                            className="w-full px-3 py-1.5 rounded-xl bg-[#050c20] border border-sky-500/30 text-white text-xs focus:outline-none focus:border-sky-400 transition-all resize-none"
-                          />
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+              {/* Box 1: মেয়েরা (Mira & Naira) */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 px-1">
+                  <span className="w-2 h-2 rounded-full bg-pink-400"></span>
+                  <h4 className="text-xs font-extrabold text-pink-300 uppercase tracking-wider">মেয়েরা</h4>
+                </div>
+                <div className="space-y-3">
+                  {(['mira', 'naira'] as SpecialistAgentId[]).map((agentId) => renderAgentCard(agentId))}
+                </div>
               </div>
 
-              {/* Save Button */}
-              <div className="pt-2">
+              {/* Box 2: ছেলেরা (Arin & Zayan) */}
+              <div className="space-y-2 pt-2">
+                <div className="flex items-center gap-2 px-1">
+                  <span className="w-2 h-2 rounded-full bg-sky-400"></span>
+                  <h4 className="text-xs font-extrabold text-sky-300 uppercase tracking-wider">ছেলেরা</h4>
+                </div>
+                <div className="space-y-3">
+                  {(['arin', 'zayan'] as SpecialistAgentId[]).map((agentId) => renderAgentCard(agentId))}
+                </div>
+              </div>
+
+              {/* Save Settings Button */}
+              <div className="pt-3 space-y-2">
                 <button
+                  type="button"
                   onClick={handleSave}
                   className="w-full py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 hover:from-blue-500 hover:to-sky-400 text-white font-extrabold text-xs flex items-center justify-center gap-2 border border-sky-400/50 shadow-[0_0_15px_rgba(56,189,248,0.35)] transition-all"
                 >
                   <Check className="w-4 h-4" />
                   <span>Save Settings</span>
+                  {hasUnsavedChanges && (
+                    <span
+                      title="অসংরক্ষিত পরিবর্তন রয়েছে"
+                      className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse ml-1 ring-2 ring-amber-300/40"
+                    />
+                  )}
                 </button>
+
+                {!isSupabaseLoggedIn && (
+                  <p className="text-center text-[11px] text-slate-400">
+                    সিঙ্কের জন্য <span className="text-sky-300 font-bold underline cursor-pointer" onClick={() => setActiveScreen('database-sync')}>Database & Sync</span>-এ লগইন করুন
+                  </p>
+                )}
               </div>
+
+              {/* Security Rules Modal */}
+              {securityModalAgentId && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+                  <div className="bg-[#07132f] border border-sky-500/40 rounded-2xl max-w-lg w-full p-5 space-y-4 shadow-2xl text-slate-100">
+                    <div className="flex items-center justify-between border-b border-sky-900/60 pb-3">
+                      <div className="flex items-center gap-2">
+                        <Lock className="w-4 h-4 text-sky-400" />
+                        <h4 className="text-sm font-extrabold text-white">
+                          {IDENTITY_AGENTS_MAP[securityModalAgentId].name} — নিরাপত্তা ও সততা নিয়ম (Immutable Rules)
+                        </h4>
+                      </div>
+                      <button
+                        onClick={() => setSecurityModalAgentId(null)}
+                        className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1 text-xs leading-relaxed text-slate-300">
+                      {SPECIALIST_IMMUTABLE_RULES.map((rule, idx) => (
+                        <div key={idx} className="p-2.5 rounded-xl bg-[#050c20] border border-sky-950 flex items-start gap-2">
+                          <span className="font-mono text-sky-400 font-bold shrink-0">{idx + 1}.</span>
+                          <span>{rule.replace(/^\d+\)\s*/, '')}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex justify-end pt-2">
+                      <button
+                        onClick={() => setSecurityModalAgentId(null)}
+                        className="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-white font-extrabold text-xs shadow-md"
+                      >
+                        বুঝেছি (Close)
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1421,6 +1958,44 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                         />
                       </div>
                     )}
+                  </div>
+
+                  {/* 7b. Rose-এর কণ্ঠস্বর (Voice & ElevenLabs) */}
+                  <div className="p-4 rounded-2xl bg-[#081533] border border-rose-500/35 space-y-2.5 shadow-[0_0_15px_rgba(244,63,94,0.1)]">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Mic className="w-4 h-4 text-rose-400" />
+                        <label className="text-xs font-extrabold text-white">
+                          Rose-এর কণ্ঠস্বর (ElevenLabs Voice)
+                        </label>
+                      </div>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        {rc.elevenLabsVoiceId ? 'কাস্টম Voice ID সক্রিয়' : 'ডিফল্ট কণ্ঠ'}
+                      </span>
+                    </div>
+
+                    <p className="text-[10px] text-slate-400 leading-relaxed">
+                      Rose-এর ElevenLabs Voice ID এখানে সেট করুন এবং প্রিভিউ শুনুন। এটি Agents স্ক্রিন থেকে আলাদা এবং শুধুই Rose-এর জন্য সংরক্ষিত।
+                    </p>
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <input
+                        type="text"
+                        value={rc.elevenLabsVoiceId || ''}
+                        onChange={(e) => handleRoseCharacterChange('elevenLabsVoiceId', e.target.value)}
+                        placeholder="e.g. pMs23urrqp9VG88KwyXl"
+                        className="flex-1 px-3 py-2 rounded-xl bg-[#050c20] border border-rose-500/30 text-white text-xs font-mono focus:outline-none focus:border-rose-400 placeholder:text-slate-600 transition-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={handlePreviewRoseVoice}
+                        disabled={previewVoiceAgent === 'rose'}
+                        className="px-4 py-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/50 text-rose-200 text-xs font-extrabold flex items-center gap-1.5 transition-all whitespace-nowrap shadow-sm disabled:opacity-50"
+                      >
+                        <Volume2 className="w-3.5 h-3.5 text-rose-400" />
+                        <span>{previewVoiceAgent === 'rose' ? 'শুনছেন...' : 'Preview Voice'}</span>
+                      </button>
+                    </div>
                   </div>
 
                   {/* 8. Interactive Test Box */}
@@ -2078,13 +2653,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      const testLang = localSettings.agents?.rose?.language || 'বাংলা';
-                      const sampleText =
-                        testLang === 'English'
-                          ? 'Hello! I am Rose. Your voice settings are working properly.'
-                          : 'হ্যালো! আমি রোজ। আপনার ব্যবসার সব কাজ আমি যত্নসহকারে দেখছি।';
+                      const sampleText = 'হ্যালো! আমি রোজ। আপনার ব্যবসার সব কাজ আমি যত্নসহকারে দেখছি।';
                       voiceChat.speak(sampleText, 'rose', {
-                        language: testLang,
+                        language: 'বাংলা',
                         speed: localSettings.voiceSettings?.speed ?? 1.0,
                         volume: localSettings.voiceSettings?.volume ?? 1.0,
                         onMissingBengaliVoice: (note) => {
@@ -2675,6 +3246,349 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           )}
 
           {/* ========================================================= */}
+          {/* DATABASE & SYNC SUB-SCREEN (SUPABASE INTEGRATION)         */}
+          {/* ========================================================= */}
+          {activeScreen === 'database-sync' && (
+            <div className="space-y-4 animate-in fade-in duration-150">
+              {/* Header Card */}
+              <div className="p-4 rounded-2xl bg-[#081533] border border-sky-500/30 space-y-1 shadow-[0_0_15px_rgba(56,189,248,0.12)]">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Database className="w-5 h-5 text-sky-400" />
+                    <h3 className="text-sm font-extrabold text-white font-display">
+                      Database & Supabase Sync
+                    </h3>
+                  </div>
+                  <span
+                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
+                      isSupabaseLoggedIn
+                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/50'
+                        : supabaseUrl && supabaseAnonKey
+                        ? 'bg-sky-500/20 text-sky-300 border-sky-400/50'
+                        : 'bg-slate-800 text-slate-400 border-slate-700'
+                    }`}
+                  >
+                    {isSupabaseLoggedIn
+                      ? 'লগইন সক্রিয় (Auto Sync)'
+                      : supabaseUrl && supabaseAnonKey
+                      ? 'কনফিগার করা আছে'
+                      : 'সংযোগ বিচ্ছিন্ন'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  Supabase ক্লাউড ডেটাবেসের মাধ্যমে আপনার Rose এবং ৪ জন স্পেশালিস্ট এজেন্টের সমস্ত কনফিগারেশন রিয়েলটাইমে সিঙ্ক রাখুন।
+                </p>
+              </div>
+
+              {/* Credentials Configuration Card */}
+              <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-3.5">
+                <h4 className="text-xs font-extrabold text-white flex items-center gap-2">
+                  <Key className="w-4 h-4 text-sky-400" />
+                  <span>Supabase API Credentials</span>
+                </h4>
+
+                <div className="space-y-2.5">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
+                      Supabase Project URL
+                    </label>
+                    <input
+                      type="text"
+                      value={supabaseUrl}
+                      onChange={(e) => setSupabaseUrl(e.target.value)}
+                      placeholder="https://xyzcompany.supabase.co"
+                      className="w-full px-3 py-2 rounded-xl bg-[#050c20] border border-sky-500/30 text-white text-xs font-mono focus:outline-none focus:border-sky-400 placeholder:text-slate-600 transition-all"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">
+                      Supabase Anon API Key
+                    </label>
+                    <input
+                      type="password"
+                      value={supabaseAnonKey}
+                      onChange={(e) => setSupabaseAnonKey(e.target.value)}
+                      placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                      className="w-full px-3 py-2 rounded-xl bg-[#050c20] border border-sky-500/30 text-white text-xs font-mono focus:outline-none focus:border-sky-400 placeholder:text-slate-600 transition-all"
+                    />
+                  </div>
+                </div>
+
+                {/* Status Message */}
+                {supabaseStatusMsg && (
+                  <div
+                    className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
+                      supabaseStatusMsg.ok
+                        ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                        : 'bg-rose-950/40 border-rose-500/40 text-rose-200'
+                    }`}
+                  >
+                    {supabaseStatusMsg.ok ? (
+                      <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                    )}
+                    <span>{supabaseStatusMsg.text}</span>
+                  </div>
+                )}
+
+                {/* Action Buttons */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={handleTestSupabaseConnection}
+                    disabled={supabaseTesting || !supabaseUrl || !supabaseAnonKey}
+                    className="py-2.5 px-3 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/50 text-sky-200 text-xs font-extrabold flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${supabaseTesting ? 'animate-spin' : ''}`} />
+                    <span>{supabaseTesting ? 'পরীক্ষা করা হচ্ছে...' : 'Test & Save Connection'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleSyncSupabaseNow}
+                    disabled={supabaseSyncing || !supabaseUrl || !supabaseAnonKey}
+                    className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 hover:from-blue-500 hover:to-sky-400 text-white text-xs font-extrabold flex items-center justify-center gap-2 border border-sky-400/50 shadow-md transition-all disabled:opacity-50"
+                  >
+                    <Cloud className={`w-3.5 h-3.5 ${supabaseSyncing ? 'animate-pulse' : ''}`} />
+                    <span>{supabaseSyncing ? 'সিঙ্ক হচ্ছে...' : 'Sync All Agents Now'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Table Schema & Security Rules Info */}
+              <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-extrabold text-white flex items-center gap-2">
+                    <Shield className="w-4 h-4 text-emerald-400" />
+                    <span>নিরাপত্তা ও সংরক্ষিত ডেটা নীতি</span>
+                  </h4>
+                  <span className="text-[10px] text-emerald-300 font-mono">5 Rows Only</span>
+                </div>
+
+                <div className="space-y-1.5 text-[11px] text-slate-300">
+                  <p>
+                    • টেবিলে মোট ৫টি রো থাকবে (user_id দিয়ে ফিল্টার করা): <span className="font-mono text-rose-300">&apos;rose&apos;</span>, <span className="font-mono text-emerald-300">&apos;mira&apos;</span>, <span className="font-mono text-sky-300">&apos;arin&apos;</span>, <span className="font-mono text-amber-300">&apos;zayan&apos;</span>, <span className="font-mono text-purple-300">&apos;naira&apos;</span>।
+                  </p>
+                  <p className="text-slate-400">
+                    • <strong>কঠোর নিরাপত্তা:</strong> নাম, অবতার, রোল, বা এপিআই কি কখনো ক্লাউডে যায় না। ক্লাউড শুধুমাত্র ব্যবহারকারীর নিজস্ব পার্সোনালিটি ও নির্দেশনা সংরক্ষণ করে।
+                  </p>
+                </div>
+              </div>
+
+              {/* Standalone SQL Script Card */}
+              <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-extrabold text-white flex items-center gap-2">
+                    <Code2 className="w-4 h-4 text-sky-400" />
+                    <span>Supabase SQL Script (Migration)</span>
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const sql = `create table if not exists public.agent_settings (
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  agent_id text not null check (agent_id in ('rose','mira','arin','zayan','naira')),
+  settings jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now(),
+  primary key (user_id, agent_id)
+);
+alter table public.agent_settings enable row level security;
+create policy "own agent settings" on public.agent_settings
+  for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+alter publication supabase_realtime add table public.agent_settings;`;
+                      navigator.clipboard.writeText(sql);
+                      onToast('SQL স্ক্রিপ্ট কপি করা হয়েছে');
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-400/40 text-[10px] text-sky-300 font-bold flex items-center gap-1 transition-all"
+                  >
+                    <Copy className="w-3 h-3" />
+                    <span>Copy SQL</span>
+                  </button>
+                </div>
+
+                <p className="text-[10px] text-slate-400">
+                  Supabase ড্যাশবোর্ডের SQL Editor-এ এই কোডটি চালিয়ে <span className="font-mono text-sky-300">public.agent_settings</span> টেবিল ও Realtime চালু করুন:
+                </p>
+
+                <div className="p-3 rounded-xl bg-[#04091a] border border-slate-800 text-[10px] font-mono text-slate-300 whitespace-pre overflow-x-auto leading-relaxed custom-scrollbar">
+{`create table if not exists public.agent_settings (
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  agent_id text not null check (agent_id in ('rose','mira','arin','zayan','naira')),
+  settings jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now(),
+  primary key (user_id, agent_id)
+);
+alter table public.agent_settings enable row level security;
+create policy "own agent settings" on public.agent_settings
+  for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+alter publication supabase_realtime add table public.agent_settings;`}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================= */}
+          {/* PHONE LINK SUB-SCREEN                                     */}
+          {/* ========================================================= */}
+          {activeScreen === 'phone-link' && (
+            <div className="space-y-4 animate-in fade-in duration-150">
+              {/* Header Card */}
+              <div className="p-4 rounded-2xl bg-[#081533] border border-sky-500/30 space-y-2 shadow-[0_0_15px_rgba(56,189,248,0.12)]">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Smartphone className="w-5 h-5 text-sky-400" />
+                    <h3 className="text-sm font-extrabold text-white font-display">
+                      Phone Link (মোবাইল সংযোগ)
+                    </h3>
+                  </div>
+                  <span
+                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
+                      phoneLinkStatus === 'Listening'
+                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/50'
+                        : phoneLinkStatus === 'Paused'
+                        ? 'bg-amber-500/20 text-amber-300 border-amber-400/50'
+                        : 'bg-rose-500/20 text-rose-300 border-rose-400/50'
+                    }`}
+                  >
+                    {phoneLinkStatus} {phoneLinkError ? `(${phoneLinkError})` : ''}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  মোবাইল অ্যাপ থেকে প্রেরিত প্রশ্ন ও নোট পিসির Rose-এর কাছে রিয়েলটাইমে সিঙ্ক ও প্রক্রিয়া করুন।
+                </p>
+              </div>
+
+              {/* Login Status & Pause Switch Card */}
+              <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-3.5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-xs font-extrabold text-white">লগইন ও সংযোগের অবস্থা</h4>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      {isSupabaseLoggedIn && supabaseUserEmail ? (
+                        <span className="text-emerald-300 font-mono font-bold">{supabaseUserEmail}</span>
+                      ) : (
+                        <span
+                          onClick={() => setActiveScreen('database-sync')}
+                          className="text-sky-300 font-bold underline cursor-pointer"
+                        >
+                          Database & Sync-এ লগইন করুন
+                        </span>
+                      )}
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-bold text-slate-300">Pause linking</span>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={isPhoneLinkPaused}
+                        onChange={(e) => {
+                          const paused = e.target.checked;
+                          setIsPhoneLinkPaused(paused);
+                          deviceLinkService.setPaused(paused);
+                        }}
+                        className="sr-only peer"
+                      />
+                      <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-500 shadow-inner"></div>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Self Test Button */}
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const res = await deviceLinkService.selfTest();
+                      onToast(res.message);
+                      setPhoneLinkRequests(deviceLinkService.getRecentRequests());
+                    }}
+                    className="w-full py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 hover:from-blue-500 hover:to-sky-400 text-white font-extrabold text-xs flex items-center justify-center gap-2 border border-sky-400/50 shadow-[0_0_15px_rgba(56,189,248,0.35)] transition-all"
+                  >
+                    <Play className="w-4 h-4" />
+                    <span>Self test (সেলফ-টেস্ট পাঠান)</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Recent 10 Requests List */}
+              <div className="p-4 rounded-2xl bg-[#081533] border border-sky-900/70 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-extrabold text-white flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-sky-400" />
+                    <span>শেষ ১০টি অনুরোধের তালিকা (Recent Requests)</span>
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => setPhoneLinkRequests(deviceLinkService.getRecentRequests())}
+                    className="text-[10px] text-sky-300 hover:text-white flex items-center gap-1"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    <span>Refresh</span>
+                  </button>
+                </div>
+
+                {phoneLinkRequests.length === 0 ? (
+                  <div className="py-8 text-center text-slate-400 text-xs">
+                    কোনো অনুরোধ পাওয়া যায়নি।
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
+                    {phoneLinkRequests.map((req) => {
+                      const snippet = (req.payload?.text || '').slice(0, 60);
+                      const timeStr = new Date(req.created_at).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                      });
+                      const statusColor =
+                        req.status === 'done'
+                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40'
+                          : req.status === 'processing'
+                          ? 'bg-sky-500/20 text-sky-300 border-sky-400/40 animate-pulse'
+                          : req.status === 'failed' || req.status === 'denied'
+                          ? 'bg-rose-500/20 text-rose-300 border-rose-400/40'
+                          : 'bg-amber-500/20 text-amber-300 border-amber-400/40';
+
+                      return (
+                        <div
+                          key={req.id}
+                          className="p-3 rounded-xl bg-[#050c20] border border-sky-950 space-y-1.5 text-xs"
+                        >
+                          <div className="flex items-center justify-between text-[10px]">
+                            <span className="font-mono text-slate-400">{timeStr}</span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="px-1.5 py-0.5 rounded bg-sky-950 text-sky-300 font-mono">
+                                {req.from_device} → {req.to_device}
+                              </span>
+                              <span className={`px-2 py-0.5 rounded font-bold border ${statusColor}`}>
+                                {req.status}
+                              </span>
+                            </div>
+                          </div>
+
+                          <p className="text-white font-medium truncate">
+                            &ldquo;{snippet}&rdquo;
+                          </p>
+
+                          {req.result && (
+                            <p className="text-[11px] text-slate-300 bg-[#081533] p-2 rounded-lg border border-sky-950/60 font-mono">
+                               ফল: {req.result.text || req.result.error || JSON.stringify(req.result)}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================= */}
           {/* 5. ALL OTHER SUB-SCREENS: "শীঘ্রই আসছে" (Coming Soon)        */}
           {/* ========================================================= */}
           {activeScreen &&
@@ -2685,6 +3599,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             activeScreen !== 'customization' &&
             activeScreen !== 'agents' &&
             activeScreen !== 'rose-character' &&
+            activeScreen !== 'database-sync' &&
+            activeScreen !== 'phone-link' &&
             activeScreen !== 'analytics' &&
             activeScreen !== 'pc-control' &&
             activeScreen !== 'security-privacy' &&
